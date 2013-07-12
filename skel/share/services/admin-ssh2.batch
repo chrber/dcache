@@ -6,6 +6,7 @@ check -strong admin.dsaHostKeyPrivate
 check -strong admin.dsaHostKeyPublic
 check -strong dcache.service.gplazma
 check -strong admin.ssh2.gid
+check -strong admin.ssh2.timeout.readwrite
 check admin.authorizedKey2
 
 set context knownUsersFile "${knownUsersFile}"

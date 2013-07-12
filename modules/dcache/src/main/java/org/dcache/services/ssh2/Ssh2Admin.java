@@ -2,6 +2,7 @@ package org.dcache.services.ssh2;
 
 import com.google.common.base.Charsets;
 import com.google.common.io.Files;
+import org.apache.mina.core.session.IoSessionConfig;
 import org.apache.sshd.SshServer;
 import org.apache.sshd.common.keyprovider.FileKeyPairProvider;
 import org.apache.sshd.server.PasswordAuthenticator;
@@ -59,8 +60,10 @@ public class Ssh2Admin implements CellCommandListener, CellMessageSender,
     private int _adminGroupId;
     private File _historyFile;
     private LoginStrategy _loginStrategy;
+    private String _timeoutReadWrite;
     // Cell Functionality
     private CellEndpoint _cellEndPoint;
+
 
     public Ssh2Admin() {
         _server = SshServer.setUpDefaultServer();
@@ -123,6 +126,14 @@ public class Ssh2Admin implements CellCommandListener, CellMessageSender,
 
     public void setAuthorizedKeyList(File authorizedKeyList) {
         _authorizedKeyList = authorizedKeyList;
+    }
+
+    public void setTimeoutReadWrite(String timeoutReadWrite) {
+        this._timeoutReadWrite = timeoutReadWrite;
+    }
+
+    public String getTimeoutReadWrite() {
+        return _timeoutReadWrite;
     }
 
     @Override
@@ -211,6 +222,12 @@ public class Ssh2Admin implements CellCommandListener, CellMessageSender,
 
     }
 
+    private void configureSession(ServerSession session){
+        _log.debug("read/write timeout was {} seconds.",  session.getIoSession().getConfig().getBothIdleTime());
+        session.getIoSession().getConfig().setBothIdleTime(Integer.parseInt(_timeoutReadWrite));
+        _log.debug("Set read/write timeout to {} seconds.", _timeoutReadWrite);
+    }
+
     private void startServer() {
         _server.setPort(_port);
 
@@ -227,7 +244,8 @@ public class Ssh2Admin implements CellCommandListener, CellMessageSender,
         public boolean authenticate(String userName, String password,
                 ServerSession session) {
             _log.debug("Authentication username set to: {}", userName);
-            return kpwdLogin(userName, password);
+            boolean authReturnValue = kpwdLogin(userName, password);
+            return authReturnValue;
         }
     }
 
