@@ -64,7 +64,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
     private Method[] _commandMethod = new Method[COM_SIGNATURE.length];
 
     private Object _commandObject;
-    private final UserAdminShell _userAdminShell;
+    private UserAdminShell _userAdminShell;
     private InputStream _in;
     private ExitCallback _exitCallback;
     private OutputStream _out;
