@@ -17,6 +17,9 @@ import java.awt.event.ActionListener;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.sql.Timestamp;
+import java.util.Calendar;
+import java.util.Date;
 
 import diskCacheV111.admin.UserAdminShell;
 
@@ -118,6 +121,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
     @Override
     public void setOutputStream(OutputStream out) {
         _out = out;
+        _logger.debug("OutputStream is: {}", _out);
         _outWriter = new SshOutputStreamWriter(out);
     }
 
@@ -301,6 +305,10 @@ public class ConsoleReaderCommand implements Command, Runnable {
         ObjectOutputStream out =
                 new ObjectOutputStream(this.getOutputStream());
         _logger.debug("ObjectOutputStream created");
+        out.flush();
+        Calendar calendar = Calendar.getInstance();
+        Date currentTimestamp = new Timestamp(calendar.getTime().getTime());
+        _logger.debug("{} flushed ObjectOutputStream", currentTimestamp);
         ObjectInputStream in =
                 new ObjectInputStream(this.getInputStream());
         _logger.debug("ObjectInputStream created");
