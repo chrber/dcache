@@ -64,7 +64,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
     private Method[] _commandMethod = new Method[COM_SIGNATURE.length];
 
     private Object _commandObject;
-    private final UserAdminShell _userAdminShell;
+    private UserAdminShell _userAdminShell;
     private InputStream _in;
     private ExitCallback _exitCallback;
     private OutputStream _out;
@@ -74,14 +74,12 @@ public class ConsoleReaderCommand implements Command, Runnable {
     private ConsoleReader _console;
     private History _history;
     private boolean _useColors;
+    private final CellEndpoint _endpoint;
 
-
-
-    public ConsoleReaderCommand(String username, CellEndpoint cellEndpoint,
+    public ConsoleReaderCommand(CellEndpoint endpoint,
             File historyFile, boolean useColor) {
         _useColors = useColor;
-        _userAdminShell = new UserAdminShell(username, cellEndpoint,
-                cellEndpoint.getArgs());
+        _endpoint = endpoint;
         if (historyFile != null && historyFile.isFile()) {
             try {
                 _history = new History(historyFile);
@@ -131,6 +129,9 @@ public class ConsoleReaderCommand implements Command, Runnable {
 
     @Override
     public void start(Environment env) throws IOException {
+        String user = env.getEnv().get(Environment.ENV_USER);
+        _userAdminShell = new UserAdminShell(user, _endpoint,
+                _endpoint.getArgs());
         _console = new ConsoleReader(_in, _outWriter, null, new ConsoleReaderTerminal(env));
         _adminShellThread = new Thread(this);
         _adminShellThread.start();
