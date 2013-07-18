@@ -303,16 +303,18 @@ public class ConsoleReaderCommand implements Command, Runnable {
             throws IOException, ClassNotFoundException
     {
         _logger.debug("Switched to binary mode.");
+        ObjectInputStream in =
+                new ObjectInputStream(this.getInputStream());
+        _logger.debug("ObjectInputStream created");
+        OutputStream outputStream = this.getOutputStream();
+        _logger.debug("Got OutputStream");
         ObjectOutputStream out =
-                new ObjectOutputStream(this.getOutputStream());
+                new ObjectOutputStream(outputStream);
         _logger.debug("ObjectOutputStream created");
         out.flush();
         Calendar calendar = Calendar.getInstance();
         Date currentTimestamp = new Timestamp(calendar.getTime().getTime());
         _logger.debug("{} flushed ObjectOutputStream", currentTimestamp);
-        ObjectInputStream in =
-                new ObjectInputStream(this.getInputStream());
-        _logger.debug("ObjectInputStream created");
         Object obj;
         while ((obj = in.readObject()) != null) {
             _logger.debug("Reading objects from stream.");
