@@ -118,9 +118,11 @@
             <dependency>
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
-                <!-- Remember to update modules/logback-test-config/pom.xml
+                <!-- 1.0.13 breaks remote logging; until this is
+                     better understood, we should not move past 1.0.12.
+                     Remember to update modules/logback-test-config/pom.xml
                      when upgrading logback. -->
-                <version>1.0.13</version>
+                <version>1.0.12</version>
             </dependency>
             <dependency>
                 <groupId>jline</groupId>
@@ -141,7 +143,7 @@
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>14.0.1</version>
+                <version>15.0</version>
             </dependency>
             <dependency>
                 <groupId>eu.emi</groupId>
@@ -266,7 +268,7 @@
             <dependency>
                 <groupId>com.jolbox</groupId>
                 <artifactId>bonecp</artifactId>
-                <version>0.7.1.RELEASE</version>
+                <version>0.8.0-rc3</version>
             </dependency>
             <dependency>
                 <groupId>org.postgresql</groupId>
@@ -281,6 +283,14 @@
                     <exclusion>
                         <groupId>commons-logging</groupId>
                         <artifactId>commons-logging</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>io.milton</groupId>
+                        <artifactId>milton-mail-api</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>io.milton</groupId>
+                        <artifactId>milton-mail-server</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>
@@ -693,23 +703,65 @@
             </dependency>
 
             <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>2.2.2</version>
+            </dependency>
+
+            <dependency>
                 <groupId>org.freehep</groupId>
                 <artifactId>freehep-jaida</artifactId>
                 <version>3.4.1</version>
                 <exclusions>
                     <exclusion>
-                        <!-- We manually have a dependency on the
-                             org.apache.xerces variant of Xerces -->
+                        <groupId>org.freehep</groupId>
+                        <artifactId>freehep-commandline</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.freehep</groupId>
+                        <artifactId>freehep-commanddispatcher</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.freehep</groupId>
+                        <artifactId>freehep-argv</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.freehep</groupId>
+                        <artifactId>freehep-jaida-xml</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.freehep</groupId>
+                        <artifactId>freehep-xml</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>hep.aida</groupId>
+                        <artifactId>aida-test</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>com.l2fprod</groupId>
+                        <artifactId>l2fprod-common-all</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>commons-math</groupId>
+                        <artifactId>commons-math</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>javax.help</groupId>
+                        <artifactId>javahelpr</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>jdom</groupId>
+                        <artifactId>jdom</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>net.java.dev</groupId>
+                        <artifactId>net.java.dev:truezip</artifactId>
+                    </exclusion>
+                    <exclusion>
                         <groupId>xerces</groupId>
                         <artifactId>xercesImpl</artifactId>
                     </exclusion>
                 </exclusions>
-            </dependency>
-
-            <dependency>
-                <groupId>com.google.code.gson</groupId>
-                <artifactId>gson</artifactId>
-                <version>2.2.2</version>
             </dependency>
 
             <dependency>
@@ -721,6 +773,12 @@
                 <groupId>org.freehep</groupId>
                 <artifactId>freehep-graphicsio</artifactId>
                 <version>2.2.1</version>
+            </dependency>
+
+            <dependency>
+              <groupId>org.apache.commons</groupId>
+              <artifactId>commons-compress</artifactId>
+              <version>1.5</version>
             </dependency>
 
             <dependency>
@@ -756,6 +814,10 @@
                 <exclusion>
                     <groupId>org.dcache</groupId>
                     <artifactId>oncrpc4j-spring</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.sun.jna</groupId>
+                    <artifactId>jna</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -810,6 +872,7 @@
             <groupId>org.powermock</groupId>
             <artifactId>powermock-module-junit4</artifactId>
             <version>1.5.1</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.scalatest</groupId>
@@ -1106,7 +1169,6 @@
         <module>modules/gplazma2-gsi</module>
         <module>modules/gplazma2-htpasswd</module>
         <module>modules/javatunnel</module>
-        <module>modules/srm</module>
         <module>modules/dcache</module>
         <module>modules/dcache-chimera</module>
         <module>modules/dcache-ftp</module>
@@ -1116,7 +1178,9 @@
         <module>modules/dcache-gplazma</module>
         <module>modules/dcache-jms</module>
         <module>modules/dcache-webadmin</module>
-        <module>modules/srmclient</module>
+        <module>modules/srm-common</module>
+        <module>modules/srm-server</module>
+        <module>modules/srm-client</module>
         <module>modules/acl</module>
         <module>modules/chimera</module>
         <module>modules/missingfiles-semsg</module>

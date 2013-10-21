@@ -66,7 +66,7 @@
     </dependency>
     <dependency>
       <groupId>org.dcache</groupId>
-      <artifactId>srm</artifactId>
+      <artifactId>srm-server</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -163,7 +163,10 @@
         <artifactId>commons-codec</artifactId>
         <version>1.4</version>
     </dependency>
-
+    <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+    </dependency>
     <dependency>
         <groupId>org.liquibase</groupId>
         <artifactId>liquibase-core</artifactId>

@@ -86,13 +86,15 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root)
 /usr/sbin/dcache-pool-meta-preupgrade
+/usr/sbin/dcache-info-provider
+/usr/sbin/dcache-billing-indexer
 /usr/bin/chimera-cli
 /usr/bin/dcache
 /usr/bin/dcache-star
-/usr/sbin/dcache-info-provider
 /usr/share/doc/dcache
 /usr/share/dcache
 /usr/share/man/man8/dcache-bootloader.8
+/usr/share/man/man8/dcache-billing-indexer.8
 /usr/share/man/man8/dcache.8
 /var/log/dcache
 

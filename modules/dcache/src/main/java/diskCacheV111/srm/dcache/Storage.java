@@ -71,7 +71,7 @@ COPYRIGHT STATUS:
 package diskCacheV111.srm.dcache;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Ranges;
+import com.google.common.collect.Range;
 import org.apache.axis.types.UnsignedLong;
 import org.globus.gsi.gssapi.GlobusGSSCredentialImpl;
 import org.ietf.jgss.GSSCredential;
@@ -81,6 +81,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Required;
 import org.springframework.dao.DataAccessException;
 
+import javax.annotation.Nonnull;
 import javax.naming.NamingEnumeration;
 import javax.naming.NamingException;
 import javax.naming.directory.Attribute;
@@ -416,13 +417,6 @@ public final class Storage
             InterruptedException, IllegalStateTransition
     {
         _log.info("Starting SRM");
-
-        if (config.getJdbcPass() == null && config.getJdbcPwdfile() == null) {
-            String error = "database parameters are not specified; use options " +
-                "-jdbcUrl, -jdbcDriver, -dbUser and -dbPass/-pgPass";
-            _log.error(error);
-            throw new IllegalStateException(error);
-        }
 
         while (_poolMonitor == null) {
             try {
@@ -966,7 +960,7 @@ public final class Storage
                         URI surl,
                         String clientHost,
                         long pinLifetime,
-                        long requestId,
+                        String requestToken,
                         PinCallbacks callbacks)
     {
         try {
@@ -975,7 +969,7 @@ public final class Storage
                                  clientHost,
                                  callbacks,
                                  pinLifetime,
-                                 requestId,
+                                 requestToken,
                                  _isOnlinePinningEnabled,
                                  _poolMonitor,
                                  _pnfsStub,
@@ -1002,10 +996,10 @@ public final class Storage
     @Override
     public void unPinFileBySrmRequestId(SRMUser user, String fileId,
                                         UnpinCallbacks callbacks,
-                                        long srmRequestId)
+                                        String requestToken)
     {
         UnpinCompanion.unpinFileBySrmRequestId(((DcacheUser) user).getSubject(),
-                new PnfsId(fileId), srmRequestId, callbacks, _pinManagerStub);
+                new PnfsId(fileId), requestToken, callbacks, _pinManagerStub);
     }
 
     @Override
@@ -1523,9 +1517,6 @@ public final class Storage
             FileAttributes updatedAttributes = new FileAttributes();
             updatedAttributes.setMode(dfmd.permMode);
             handler.setFileAttributes(dfmd.getPnfsId(), updatedAttributes);
-
-            FileAttributes attributes = dfmd.getFileAttributes();
-            attributes.setMode(dfmd.permMode);
         } catch (TimeoutCacheException e) {
             throw new SRMInternalErrorException("PnfsManager is unavailable: "
                                                 + e.getMessage(), e);
@@ -1540,7 +1531,7 @@ public final class Storage
         }
     }
 
-    @Override
+    @Override @Nonnull
     public FileMetaData getFileMetaData(SRMUser user, URI surl, boolean read)
         throws SRMException
     {
@@ -2405,7 +2396,7 @@ public final class Storage
 
         try {
             _listSource.printDirectory(subject, printer, path, null,
-                                       Ranges.<Integer>all());
+                                       Range.<Integer>all());
             return result;
         } catch (TimeoutCacheException e) {
             throw new SRMInternalErrorException("Internal name space timeout", e);
@@ -2435,7 +2426,7 @@ public final class Storage
             FmdListPrinter printer =
                 verbose ? new VerboseListPrinter() : new FmdListPrinter();
             _listSource.printDirectory(subject, printer, path, null,
-                                       Ranges.closedOpen(offset, offset + count));
+                                       Range.closedOpen(offset, offset + count));
             return printer.getResult();
         } catch (TimeoutCacheException e) {
             throw new SRMInternalErrorException("Internal name space timeout", e);
@@ -2889,6 +2880,7 @@ public final class Storage
     /**
      *
      * we support only permanent file, lifetime is always -1
+     *
      * @param newLifetime SURL lifetime in seconds
      *   -1 stands for infinite lifetime
      * @return long lifetime left in seconds
@@ -2896,7 +2888,7 @@ public final class Storage
      *
      */
     @Override
-    public int srmExtendSurlLifetime(SRMUser user, URI surl, int newLifetime)
+    public long srmExtendSurlLifetime(SRMUser user, URI surl, long newLifetime)
         throws SRMException
     {
         checkWritePrivileges(user, surl);
@@ -2935,7 +2927,7 @@ public final class Storage
                                    e.getRc()+" errorObject = "+
                                    e.getMessage());
         } catch (InterruptedException e) {
-            throw new SRMException("Request to SrmSpaceManager got interrupted", e);
+            throw new SRMInternalErrorException("Request to SrmSpaceManager got interrupted", e);
         }
     }
 
@@ -2973,7 +2965,7 @@ public final class Storage
         } catch (CacheException e) {
             throw new SRMException("extendPinLifetime failed, PinManagerExtendLifetimeMessage.returnCode="+ e.getRc() + " errorObject = " + e.getMessage());
         } catch (InterruptedException e) {
-            throw new SRMException("Request to PinManager got interrupted", e);
+            throw new SRMInternalErrorException("Request to PinManager got interrupted", e);
         }
     }
 

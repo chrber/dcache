@@ -63,6 +63,7 @@ import java.util.Collection;
 
 import org.dcache.services.billing.db.exceptions.BillingInitializationException;
 import org.dcache.services.billing.db.exceptions.BillingQueryException;
+import org.dcache.services.billing.histograms.data.IHistogramData;
 
 /**
  * Defines DAO API for interacting with billing information.
@@ -108,11 +109,17 @@ public interface IBillingInfoAccess {
 
     void initialize() throws BillingInitializationException;
 
+    long getInsertQueueSize();
+
+    long getCommittedMessages();
+
+    long getDroppedMessages();
+
     /**
      * @param data
      *            mapped type to be stored
      */
-    <T> void put(T data) throws BillingQueryException;
+    void put(IHistogramData data) throws BillingQueryException;
 
     /**
      * @param type
