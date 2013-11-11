@@ -63,6 +63,7 @@ usage()
     echo "   status"
     echo "   stop [<domain>]..."
     echo "   version"
+    echo "   submit bugreport"
     echo
     echo "Size is specified in bytes, or optionally followed by K, M, G or T"
     echo "for powers of 1024. Size is rounded down to the nearest integer"
@@ -351,6 +352,144 @@ poolDumpYaml() # $1 = domain, $2 = cell
     path=$(getProperty pool.path "$1" "$2")
     type=$(getProperty pool.plugins.meta "$1" "$2")
     CLASSPATH="$classpath" quickJava org.dcache.pool.repository.MetaDataStoreYamlTool "$path" "$type"
+}
+
+createBasicBugReportFile() # $1 = filePath  $2 = prefix  $3 = tmpBugreportPath
+{
+local tmpFilePath=$1
+local tmpPrefix=$2
+local tmpDirPath=$3
+
+if [ "`uname`" = "SunOS" ]; then
+    echo "Bug reporting not implemented yet. Ask Christian do do that."
+else
+    echo "Seems to be no Solaris Plattform"
+    if [ ! -d $tmpDirPath ]; then
+        mkdir -p  $tmpDirPath
+    fi
+    if [ -f  $tmpFilePath ]; then
+        echo "File already exists: $tmpFilePath"
+        rm $tmpFilePath
+    fi
+    echo "Table of Content" >>  $tmpFilePath
+    echo "------------------------------------------" >>  $tmpFilePath
+    for (( i=0 ; i<${#descriptionOfCommand[@]} ; i++ ));
+    do
+        echo " ${descriptionOfCommand[i]}"  >>  $tmpFilePath
+    done
+    echo "----------endTableContent-----------------" >>  $tmpFilePath
+    echo "" >>  $tmpFilePath
+
+    for (( i=0 ; i<${#commandsToExecute[@]} ; i++ ));
+    do
+        echo ${descriptionOfCommand[i]} : >> $tmpFilePath
+        echo "------------------------------"  >> $tmpFilePath
+        ${commandsToExecute[i]} >> $tmpFilePath 2>&1
+        echo "" >>  $tmpFilePath;
+    done
+fi
+
+}
+
+addFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
+{
+    local fileToAddPath=$1
+    local bugReportFilePath=$2
+    local headline=$3
+
+    echo Headline: $3
+    echo ReportFilePath: $2
+    echo file to be added:  $1
+    echo current index: $4
+
+    echo $4. $3 >>  $2
+    echo "------------------------------"  >> $2
+    echo ""
+    cat $1 >>  $2
+    echo "" >>  $2;
+}
+
+addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
+{
+    sed -ie '/endTableContent/ i\
+    \ '$2'. '$3' file
+    ' $1
+}
+
+sendBugReportMail()
+# $1 = sender mail address
+# $2 = destination mail address
+# $3 = short description of problem
+# $4 = long description of problem
+# $5 = bug report file
+# $6 = tmpDirPath
+{
+    local tmpDirPath=$6
+    local tmpMailrc=$MAILRC
+    local fileToSendViaMail=$tmpDirPath/combined.txt
+
+    echo DirectoryPath $tmpDirPath
+    echo bugreport file: $5
+
+    echo "------------------------------------------"  >> "$fileToSendViaMail"
+    echo "Long description of problem" > "$fileToSendViaMail"
+    echo "------------------------------------------"  >> "$fileToSendViaMail"
+    echo "$4" >> $tmpDirPath/combined.txt
+    echo "------------------------------------------"  >> "$fileToSendViaMail"
+    echo ""  >> "$fileToSendViaMail"
+    cat  $5  >> "$fileToSendViaMail"
+
+    FILESIZE=$(stat -f%z $fileToSendViaMail)
+    oneMegaInBytes=1048576
+
+    # This is a placeholder for when files get too big that they could either be
+    # tar'ed or they could be send to a dCache that we provide dedicated to this
+    if [[ $FILESIZE -gt $oneMegaInBytes ]]; then
+        echo "big file"
+    else
+        echo "small file"
+    fi
+
+    echo "\n Do you wish to use telnet(1) or mailx(2) to send the mail?"
+    read mailClientChoice
+
+    if [ $mailClientChoice = 2 ]; then
+        echo "This is not working, yet"
+        #env MAILRC=/dev/null from=$1 smtp=smtp.desy.de \
+        #          mailx -n -s "$3" \
+        #          $2 < /tmp/combined.txt
+        #env MAILRC=$tmpMailrc
+
+    else if [ $mailClientChoice = 1 ]; then
+        count=1
+        while [ $count = 1 ]
+        do
+            ( echo open smtp.desy.de 25
+              sleep 12
+              echo "helo desy.de"
+              echo "MAIL From: $1"
+              echo "RCPT To:<$2>"
+              echo "DATA"
+              echo "To: <$2>"
+              echo "From: $1 "
+              echo "Subject: $3"
+              echo "MIME-Version: 1.0"
+              echo 'Content-Type: multipart/mixed; boundary="-q1w2e3r4t5"'
+              echo
+              echo '---q1w2e3r4t5'
+              echo 'Content-Type: application; name="'$(basename $fileToSendViaMail)'"'
+              echo "Content-Transfer-Encoding: base64"
+              echo 'Content-Disposition: attachment; filename="'$(basename $fileToSendViaMail)'"'
+              uuencode -m $fileToSendViaMail $(basename $fileToSendViaMail)
+              echo '---q1w2e3r4t5--'
+              echo "."
+              echo "quit") | telnet
+              count=2
+              echo "Telnet done."
+        done
+        rm -rf $tmpDirPath/*
+        fi
+    fi
 }
 
 if [ $# -eq 0 ]; then
@@ -1133,6 +1272,156 @@ case "$1" in
         done
         ;;
 
+    submit)
+        shift
+        . ${lib}/utils.sh
+        checkForNonMigratedDcache
+        checkForPkcs8HostKey
+
+        command=$1
+        shift
+        case "$command" in
+            bugreport)
+                ## TODO:
+                # - gather log files from different machines
+                #
+                #This config needs to go somewhere inside dcache properties
+                supportEmail="christian.bernardt@desy.de"
+                prefix=$(getProperty dcache.bugreporting.prefix)
+                declare -a descriptionOfCommand=("1. OS version, CPU architecture" "2. JVM version" "3. dCache version")
+                declare -a commandsToExecute=("uname -a" "java -version" "dcache version")
+
+                # one can add directories here by adding $prefix/<directory-path>/
+
+                files="$prefix/etc/dcache.conf $prefix/var/log/"
+                echo $files
+                tmpReportPath=/tmp/dcache-bugreport
+                tmpReportfile=$tmpReportPath/bugReportFile.tmp
+
+                echo ""
+                echo "Submitting Bug Report"
+                echo "***********************************************"
+                echo ""
+                echo "The following information will be included in this bug report:"
+                echo "  - OS version, CPU architecture"
+                echo "  - JVM version"
+                echo "  - dCache version"
+                echo "  - dCache log files and dump files if they exist. "
+                echo ""
+                echo "If you do not wish to send all this data with the bug report you can"
+                echo "choose what information to include by writing select and pressing return"
+                echo "now. If you only press return now you will be given the entire file that"
+                echo "will be sent with this report. Please read through the file and erase any"
+                echo "information that you do not wish to disclose. [select<return> | <return>]:"
+
+                read choice
+
+                # Create basic infomation that will be included in any report
+                # Arrays $descriptionOfCommand $commandsToExecute are used inside this function
+                createBasicBugReportFile $tmpReportfile  $prefix $tmpReportPath
+
+                if [ "$choice" = "select" ]; then
+                    echo ""
+                    echo "You have chosen to select the information provided with this report"
+                    echo "piece by piece. Please choose yes(y) or no(n) to include or NOT include"
+                    echo "the file."
+                    echo ""
+                    index=4
+                    for pieceOfInfo in $files; do
+                        if [[ $pieceOfInfo == */ ]]; then
+                            filesInDirectory=$(ls $pieceOfInfo)
+                            for file in $filesInDirectory; do
+                                echo "Include $file y/n:"
+                                 read yesOrNo
+                                 # This need to go into a function later
+                                 while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+                                     echo "1 Please enter y for yes or n for no:"
+                                     echo "You entered:" $yesOrNo
+                                     read yesOrNo
+                                 done
+                                 if [[ $yesOrNo == "y" ]]; then
+                                     addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
+                                     addEntryToTableOfContent $tmpReportfile $index $file
+                                     printpi "\n File added: $pieceOfInfo$file \n"
+                                     index=`expr $index + 1`
+                                 else
+                                     printpi "\n Chosen not to add $pieceOfInfo$file. \n"
+                                     continue;
+                                 fi
+                             done
+                        else
+                             echo "Include $pieceOfInfo y/n:"
+                             read yesOrNo
+                             # This needs to go into a function later
+                             while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+                                 echo "2 Please enter y for yes or n for no:"
+                                 echo "You entered:" $yesOrNo
+                                 read yesOrNo
+                             done
+                             if [[ $yesOrNo == "y" ]]; then
+                                 addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+                                 addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
+                                 printpi "\n File added: $pieceOfInfo \n"
+                                 index=`expr $index + 1`
+                             else
+                                 printpi "\n Chosen not to add $pieceOfInfo. \n"
+                             fi
+                        fi
+                     done   # End of iterating over files to be published
+                     echo ""
+                     echo "Please check the following file content. By saving the file you give your"
+                     echo "consent to send everything that is in the file along with your bug report."
+                     echo "Press RETURN to continue:"
+                     read trash
+                     vi $tmpReportfile
+                else
+
+                     echo "Everything will be sent with the report. Please check the following file content."
+                     echo "By saving the file you give your consent to send everything that is in the file"
+                     echo "along with your bug report."
+                     echo "Press RETURN to continue:"
+                     read trash
+                     vi $tmpReportfile
+                fi
+
+                 # Sending bugreport to support@dcache.org
+
+                 printpi "Do you wish to send this report directly from your current machine [y/n]:"
+                 read sendDirectByMail
+                 # This need to go into a function later
+                 while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
+                     echo "3 Please enter y for yes or n for no:"
+                     echo "You entered:" $sendDirectByMail
+                     read sendDirectByMail
+                 done
+                 if [ "$sendDirectByMail" = "y" ]; then
+                     printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+                     read senderMailAddress
+                     printpi "\n Please provide a short description of the bug (one line):"
+                     read shortDescription
+                     printpi "\n Now please describe the bug in more detail:"
+                     read longDescription
+                     sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tmpReportfile" "$tmpReportPath"
+                 else
+                     echo "***************************************************************"
+                     echo "* You can find the file with all the information here:"
+                     echo "*"
+                     echo "*" $tmpReportfile
+                     echo "*"
+                     echo "* Please take the file and attach it to an e-mail that you send to"
+                     echo "*"
+                     echo "*   support@dcache.org"
+                     echo "*"
+                     echo "* and write a short description of the bug in the subject line and the long"
+                     echo "* description in the body of the e-mail."
+                     echo "*"
+                     echo "* Thank you very much that you took the time to report."
+                     echo "*"
+                     echo "***************************************************************"
+                 fi
+            ;;
+        esac
+    ;;
     *)
         usage
         ;;
