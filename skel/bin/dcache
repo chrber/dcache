@@ -361,9 +361,8 @@ local tmpPrefix=$2
 local tmpDirPath=$3
 
 if [ "`uname`" = "SunOS" ]; then
-    echo "Bug reporting not implemented yet. Ask Christian do do that."
+    echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
 else
-    echo "Seems to be no Solaris Plattform"
     if [ ! -d $tmpDirPath ]; then
         mkdir -p  $tmpDirPath
     fi
@@ -421,7 +420,7 @@ sendBugReportMail()
 # $2 = destination mail address
 # $3 = short description of problem
 # $4 = long description of problem
-# $5 = bug report file
+# $5 = bug report file OR URL
 # $6 = tmpDirPath
 {
     local tmpDirPath=$6
@@ -437,8 +436,14 @@ sendBugReportMail()
     echo "$4" >> $tmpDirPath/combined.txt
     echo "------------------------------------------"  >> "$fileToSendViaMail"
     echo ""  >> "$fileToSendViaMail"
-    cat  $5  >> "$fileToSendViaMail"
 
+    if [ -f  $5 ]; then
+        cat  $5  >> "$fileToSendViaMail"
+    else
+        echo "------------------------------------------"  >> "$fileToSendViaMail"
+        echo "Bugreport file URL on dCache SE: $5       "  >> "$fileToSendViaMail"
+        echo "------------------------------------------"  >> "$fileToSendViaMail"
+    fi
     FILESIZE=$(stat -f%z $fileToSendViaMail)
     oneMegaInBytes=1048576
 
@@ -1286,7 +1291,7 @@ case "$1" in
                 # - gather log files from different machines
                 #
                 #This config needs to go somewhere inside dcache properties
-                supportEmail="christian.bernardt@desy.de"
+                supportEmail=$(getProperty dcache.bugreporting.supporter.email)
                 prefix=$(getProperty dcache.bugreporting.prefix)
                 declare -a descriptionOfCommand=("1. OS version, CPU architecture" "2. JVM version" "3. dCache version")
                 declare -a commandsToExecute=("uname -a" "java -version" "dcache version")
@@ -1328,7 +1333,7 @@ case "$1" in
                     echo ""
                     index=4
                     for pieceOfInfo in $files; do
-                        if [[ $pieceOfInfo == */ ]]; then
+                        if [ -d $pieceOfInfo ]; then
                             filesInDirectory=$(ls $pieceOfInfo)
                             for file in $filesInDirectory; do
                                 echo "Include $file y/n:"
@@ -1375,7 +1380,26 @@ case "$1" in
                      read trash
                      vi $tmpReportfile
                 else
-
+                    index=4
+                    for pieceOfInfo in $files; do
+                        printpi "PieceOfInfo: $pieceOfInfo"
+                        if [ -d $pieceOfInfo ]; then
+                            filesInDirectory=$(ls $pieceOfInfo)
+                            for file in $filesInDirectory; do
+                                printpi "\n Adding File in directory $pieceOfInfo: $file"
+                                addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
+                                addEntryToTableOfContent $tmpReportfile $index $file
+                                printpi "\n File added: $pieceOfInfo$file \n"
+                                index=`expr $index + 1`
+                            done
+                        else
+                            printpi "Adding single file: $pieceOfInfo"
+                            addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+                            addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
+                            printpi "\n File added: $pieceOfInfo \n"
+                            index=`expr $index + 1`
+                        fi
+                    done
                      echo "Everything will be sent with the report. Please check the following file content."
                      echo "By saving the file you give your consent to send everything that is in the file"
                      echo "along with your bug report."
@@ -1386,39 +1410,97 @@ case "$1" in
 
                  # Sending bugreport to support@dcache.org
 
-                 printpi "Do you wish to send this report directly from your current machine [y/n]:"
-                 read sendDirectByMail
-                 # This need to go into a function later
-                 while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
-                     echo "3 Please enter y for yes or n for no:"
-                     echo "You entered:" $sendDirectByMail
-                     read sendDirectByMail
-                 done
-                 if [ "$sendDirectByMail" = "y" ]; then
-                     printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
-                     read senderMailAddress
-                     printpi "\n Please provide a short description of the bug (one line):"
-                     read shortDescription
-                     printpi "\n Now please describe the bug in more detail:"
-                     read longDescription
-                     sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tmpReportfile" "$tmpReportPath"
-                 else
-                     echo "***************************************************************"
-                     echo "* You can find the file with all the information here:"
-                     echo "*"
-                     echo "*" $tmpReportfile
-                     echo "*"
-                     echo "* Please take the file and attach it to an e-mail that you send to"
-                     echo "*"
-                     echo "*   support@dcache.org"
-                     echo "*"
-                     echo "* and write a short description of the bug in the subject line and the long"
-                     echo "* description in the body of the e-mail."
-                     echo "*"
-                     echo "* Thank you very much that you took the time to report."
-                     echo "*"
-                     echo "***************************************************************"
-                 fi
+                printpi "Packing file $tmpReportfile"
+                tarFile="$tmpReportfile.tar.gz"
+                tar czf $tarFile $tmpReportfile
+
+                printpi "Checking files size of $tarFile"
+                tarFileSizeMB=$(du -h "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
+
+                maxFileSize=$(getProperty dcache.bugreporting.reporter.file.size)
+
+                if [ $tarFileSizeMB -ge $maxFileSize ]; then
+                    printpi "This file is too big to be send via mail. We are trying to copy to the support SE."
+                    timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
+                    url="http://xen-ep-emi-tb-se-3.desy.de:2880/pnfs/desy.de/data/bugReports/bugReport-$timeStamp.tar.gz"
+                    curl -T $tarFile $url
+                    if [ $? == 21 ]; then
+                        printpi "File was transfered to our support SE:  $url"
+                    else
+                        printpi "File transfer to $url failed. dCache support SE might be down. Please report."
+                    fi
+                    printpi "Do you wish to send this report directly from your current machine [y/n]:"
+                    read sendDirectByMail
+                    # This needs to go into a function later
+                    while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
+                        echo "3 Please enter y for yes or n for no:"
+                        echo "You entered:" $sendDirectByMail
+                        read sendDirectByMail
+                    done
+                    if [ "$sendDirectByMail" = "y" ]; then
+                        printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+                        read senderMailAddress
+                        printpi "\n Please provide a short description of the bug (one line):"
+                        read shortDescription
+                        printpi "\n Now please describe the bug in more detail:"
+                        read longDescription
+                        sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$url" "$tmpReportPath"
+                    else
+                        #showFinalReportMessage $tmpReportfile $tarFile
+                        echo "***************************************************************"
+                        echo "* You can find the file with all the information here:"
+                        echo "*"
+                        echo "*" $tmpReportfile
+                        echo "*" $tarFile
+                        echo "*"
+                        echo "* Please take the file and attach it to an e-mail that you send to"
+                        echo "*"
+                        echo "*   support@dcache.org"
+                        echo "*"
+                        echo "* and write a short description of the bug in the subject line and the long"
+                        echo "* description in the body of the e-mail."
+                        echo "*"
+                        echo "* Thank you very much that you took the time to report."
+                        echo "*"
+                        echo "***************************************************************"
+                    fi
+                else
+                    printpi "Do you wish to send this report directly from your current machine [y/n]:"
+                    read sendDirectByMail
+                    # This needs to go into a function later
+                    while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
+                        echo "3 Please enter y for yes or n for no:"
+                        echo "You entered:" $sendDirectByMail
+                        read sendDirectByMail
+                    done
+                    if [ "$sendDirectByMail" = "y" ]; then
+                        printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+                        read senderMailAddress
+                        printpi "\n Please provide a short description of the bug (one line):"
+                        read shortDescription
+                        printpi "\n Now please describe the bug in more detail:"
+                        read longDescription
+                        sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tmpReportfile" "$tmpReportPath"
+                    else
+                        #showFinalReportMessage $tmpReportfile $tarFile
+                        echo "***************************************************************"
+                        echo "* You can find the file with all the information here:"
+                        echo "*"
+                        echo "*" $tmpReportfile
+                        echo "*" $tarFile also stored at: $url
+                        echo "*"
+                        echo "* Please take the file and attach it to an e-mail that you send to"
+                        echo "*"
+                        echo "*   support@dcache.org"
+                        echo "*"
+                        echo "* and write a short description of the bug in the subject line and the long"
+                        echo "* description in the body of the e-mail."
+                        echo "*"
+                        echo "* Thank you very much that you took the time to report."
+                        echo "*"
+                        echo "***************************************************************"
+                    fi
+                fi
             ;;
         esac
     ;;
