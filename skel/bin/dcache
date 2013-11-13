@@ -426,6 +426,7 @@ sendBugReportMail()
     local tmpDirPath=$6
     local tmpMailrc=$MAILRC
     local fileToSendViaMail=$tmpDirPath/combined.txt
+    local smtpServer=$(getProperty dcache.bugreporting.smtp)
 
     echo DirectoryPath $tmpDirPath
     echo bugreport file: $5
@@ -447,29 +448,40 @@ sendBugReportMail()
     FILESIZE=$(stat -f%z $fileToSendViaMail)
     oneMegaInBytes=1048576
 
-    # This is a placeholder for when files get too big that they could either be
-    # tar'ed or they could be send to a dCache that we provide dedicated to this
-    if [[ $FILESIZE -gt $oneMegaInBytes ]]; then
-        echo "big file"
-    else
-        echo "small file"
-    fi
+    which telnet
+    telnetPresent=$?
+    which mailx
+    mailxPresent=$?
+    which sendmail
+    sendmailPresent=$?
 
-    echo "\n Do you wish to use telnet(1) or mailx(2) to send the mail?"
+    printpi "\n Do you wish to use"
+    if [ "$telnetPresent" == 0 ]; then
+        printpi "\n telnet(1)"
+    fi
+    if [ "$mailxPresent" == 0 ]; then
+        printpi "\n mailx(2)"
+    fi
+    if [ "$sendmailPresent" == 0 ]; then
+        printpi "\n sendmail(3)"
+    fi
+    echo "\n to send the mail?"
     read mailClientChoice
+
+    #if [ $mailClientChoice = 3 ]; then
 
     if [ $mailClientChoice = 2 ]; then
         echo "This is not working, yet"
-        #env MAILRC=/dev/null from=$1 smtp=smtp.desy.de \
-        #          mailx -n -s "$3" \
-        #          $2 < /tmp/combined.txt
-        #env MAILRC=$tmpMailrc
+        env MAILRC=/dev/null from=$1 smtp=$smtpServer \
+                  mailx -n -s "$3" \
+                  $2 < /tmp/combined.txt
+        env MAILRC=$tmpMailrc
 
     else if [ $mailClientChoice = 1 ]; then
         count=1
         while [ $count = 1 ]
         do
-            ( echo open smtp.desy.de 25
+            ( echo open $smtpServer 25
               sleep 12
               echo "helo desy.de"
               echo "MAIL From: $1"
@@ -494,6 +506,7 @@ sendBugReportMail()
         done
         rm -rf $tmpDirPath/*
         fi
+    #    fi
     fi
 }
 
@@ -1287,18 +1300,12 @@ case "$1" in
         shift
         case "$command" in
             bugreport)
-                ## TODO:
-                # - gather log files from different machines
-                #
-                #This config needs to go somewhere inside dcache properties
                 supportEmail=$(getProperty dcache.bugreporting.supporter.email)
                 prefix=$(getProperty dcache.bugreporting.prefix)
                 declare -a descriptionOfCommand=("1. OS version, CPU architecture" "2. JVM version" "3. dCache version")
                 declare -a commandsToExecute=("uname -a" "java -version" "dcache version")
 
-                # one can add directories here by adding $prefix/<directory-path>/
-
-                files="$prefix/etc/dcache.conf $prefix/var/log/"
+                files=$(getProperty dcache.bugreporting.paths)
                 echo $files
                 tmpReportPath=/tmp/dcache-bugreport
                 tmpReportfile=$tmpReportPath/bugReportFile.tmp
@@ -1412,7 +1419,7 @@ case "$1" in
 
                 printpi "Packing file $tmpReportfile"
                 tarFile="$tmpReportfile.tar.gz"
-                tar czf $tarFile $tmpReportfile
+                tar czf $tarFile $tmpReportfile > /dev/null
 
                 printpi "Checking files size of $tarFile"
                 tarFileSizeMB=$(du -h "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
@@ -1423,8 +1430,9 @@ case "$1" in
                     printpi "This file is too big to be send via mail. We are trying to copy to the support SE."
                     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
                     url="http://xen-ep-emi-tb-se-3.desy.de:2880/pnfs/desy.de/data/bugReports/bugReport-$timeStamp.tar.gz"
-                    curl -T $tarFile $url
-                    if [ $? == 21 ]; then
+                    curl -f -T $tarFile $url
+                    curlResult=$?
+                    if [ "$curlResult" != 22 ]; then
                         printpi "File was transfered to our support SE:  $url"
                     else
                         printpi "File transfer to $url failed. dCache support SE might be down. Please report."
