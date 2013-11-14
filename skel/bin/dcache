@@ -425,18 +425,17 @@ sendBugReportMail()
 {
     local tmpDirPath=$6
     local tmpMailrc=$MAILRC
-    local fileToSendViaMail=$tmpDirPath/combined.txt
+    local combinedFileName=combined.txt
+    local fileToSendViaMail=$tmpDirPath/$combinedFileName
     local smtpServer=$(getProperty dcache.bugreporting.smtp)
 
-    echo DirectoryPath $tmpDirPath
-    echo bugreport file: $5
-
+    echo "Subject: $3 \n"
     echo "------------------------------------------"  >> "$fileToSendViaMail"
     echo "Long description of problem" > "$fileToSendViaMail"
     echo "------------------------------------------"  >> "$fileToSendViaMail"
     echo "$4" >> $tmpDirPath/combined.txt
     echo "------------------------------------------"  >> "$fileToSendViaMail"
-    echo ""  >> "$fileToSendViaMail"
+    echo "\n"  >> "$fileToSendViaMail"
 
     if [ -f  $5 ]; then
         cat  $5  >> "$fileToSendViaMail"
@@ -444,6 +443,7 @@ sendBugReportMail()
         echo "------------------------------------------"  >> "$fileToSendViaMail"
         echo "Bugreport file URL on dCache SE: $5       "  >> "$fileToSendViaMail"
         echo "------------------------------------------"  >> "$fileToSendViaMail"
+        echo "\n"
     fi
     FILESIZE=$(stat -f%z $fileToSendViaMail)
     oneMegaInBytes=1048576
@@ -455,27 +455,28 @@ sendBugReportMail()
     which sendmail
     sendmailPresent=$?
 
-    printpi "\n Do you wish to use"
+    printpi "\n Please enter the number in brackets to use one of these clients to send your mail:"
     if [ "$telnetPresent" == 0 ]; then
-        printpi "\n telnet(1)"
+        printpi "\n telnet(1) - you need to have dcache.bugreporting.smtp property set to a reachable SMTP server."
     fi
     if [ "$mailxPresent" == 0 ]; then
-        printpi "\n mailx(2)"
+        printpi "\n mailx(2) - you need to have your local mail client configured"
     fi
     if [ "$sendmailPresent" == 0 ]; then
-        printpi "\n sendmail(3)"
+        printpi "\n sendmail(3) - you need to have your local mail client configured and uuencode installed."
     fi
-    echo "\n to send the mail?"
+    echo "\n Choice:"
     read mailClientChoice
 
-    #if [ $mailClientChoice = 3 ]; then
-
-    if [ $mailClientChoice = 2 ]; then
-        echo "This is not working, yet"
-        env MAILRC=/dev/null from=$1 smtp=$smtpServer \
+    if [ $mailClientChoice = 3 ]; then
+        sendmail $2 <  $fileToSendViaMail
+    else if [ $mailClientChoice = 2 ]; then
+        #cat $fileToSendViaMail | uuencode $fileToSendViaMail $combinedFileName | mailx -s "$3" $2
+        tmpMailrc=$MAILRC
+        from=$1 smtp=$smtpServer \
                   mailx -n -s "$3" \
-                  $2 < /tmp/combined.txt
-        env MAILRC=$tmpMailrc
+                  $2 < $fileToSendViaMail
+        MAILRC=$tmpMailrc
 
     else if [ $mailClientChoice = 1 ]; then
         count=1
@@ -506,7 +507,7 @@ sendBugReportMail()
         done
         rm -rf $tmpDirPath/*
         fi
-    #    fi
+        fi
     fi
 }
 
@@ -1309,6 +1310,7 @@ case "$1" in
                 echo $files
                 tmpReportPath=/tmp/dcache-bugreport
                 tmpReportfile=$tmpReportPath/bugReportFile.tmp
+                FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
 
                 echo ""
                 echo "Submitting Bug Report"
@@ -1327,8 +1329,13 @@ case "$1" in
                 echo "information that you do not wish to disclose. [select<return> | <return>]:"
 
                 read choice
+                while ! [ "$choice" = "select" ] && ! [ "$choice" = "" ]; do
+                    echo "Please enter select<return> or just press <return>:"
+                    echo "You entered:" $choice
+                    read choice
+                done
 
-                # Create basic infomation that will be included in any report
+                # Create basic information that will be included in any report
                 # Arrays $descriptionOfCommand $commandsToExecute are used inside this function
                 createBasicBugReportFile $tmpReportfile  $prefix $tmpReportPath
 
@@ -1429,7 +1436,7 @@ case "$1" in
                 if [ $tarFileSizeMB -ge $maxFileSize ]; then
                     printpi "This file is too big to be send via mail. We are trying to copy to the support SE."
                     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
-                    url="http://xen-ep-emi-tb-se-3.desy.de:2880/pnfs/desy.de/data/bugReports/bugReport-$timeStamp.tar.gz"
+                    url="$FQSN/bugReport-$timeStamp.tar.gz"
                     curl -f -T $tarFile $url
                     curlResult=$?
                     if [ "$curlResult" != 22 ]; then
@@ -1463,7 +1470,7 @@ case "$1" in
                         echo "*"
                         echo "* Please take the file and attach it to an e-mail that you send to"
                         echo "*"
-                        echo "*   support@dcache.org"
+                        echo "*   $supportEmail"
                         echo "*"
                         echo "* and write a short description of the bug in the subject line and the long"
                         echo "* description in the body of the e-mail."
@@ -1499,7 +1506,7 @@ case "$1" in
                         echo "*"
                         echo "* Please take the file and attach it to an e-mail that you send to"
                         echo "*"
-                        echo "*   support@dcache.org"
+                        echo "*   $supportEmail"
                         echo "*"
                         echo "* and write a short description of the bug in the subject line and the long"
                         echo "* description in the body of the e-mail."
