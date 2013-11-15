@@ -420,17 +420,13 @@ addFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline
     local fileToAddPath=$1
     local bugReportFilePath=$2
     local headline=$3
+    local index=$4
 
-    echo Headline: $3
-    echo ReportFilePath: $2
-    echo file to be added:  $1
-    echo current index: $4
-
-    echo $4. $3 >>  $2
-    echo "------------------------------"  >> $2
+    (echo $index. $headline
+    echo "------------------------------"
     echo ""
-    cat $1 >>  $2
-    echo "" >>  $2;
+    cat $fileToAddPath
+    echo "") >>  $bugReportFilePath;
 }
 
 addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
@@ -454,49 +450,48 @@ sendBugReportMail()
     local fileToSendViaMail="$tmpDirPath/$combinedFileName"
     local smtpServer=$(getProperty dcache.bugreporting.smtp)
 
-    echo "Subject: $3 \n"
-    echo "------------------------------------------"  >> "$fileToSendViaMail"
-    echo "Long description of problem" > "$fileToSendViaMail"
-    echo "------------------------------------------"  >> "$fileToSendViaMail"
-    echo "$4" >> "$fileToSendViaMail"
-    echo "------------------------------------------"  >> "$fileToSendViaMail"
-    echo "\n"  >> "$fileToSendViaMail"
-
+    (echo "Subject: $3 \n"
+    echo "------------------------------------------"
+    echo "Long description of problem"
+    echo "------------------------------------------"
+    echo "$4"
+    echo "------------------------------------------"
+    echo "\n"
+    ) > "$fileToSendViaMail"
     if [ -f  $5 ]; then
-        cat  $5  >> "$fileToSendViaMail"
+        echo "$5" >> "$fileToSendViaMail"
     else
-        echo "------------------------------------------"  >> "$fileToSendViaMail"
-        echo "Bugreport file URL on dCache SE: $5       "  >> "$fileToSendViaMail"
-        echo "------------------------------------------"  >> "$fileToSendViaMail"
+        (echo "------------------------------------------"
+        echo "Bugreport file URL on dCache SE: $5       "
+        echo "------------------------------------------"
         echo "\n"
+        ) >> "$fileToSendViaMail"
     fi
-    FILESIZE=$(stat -f%z $fileToSendViaMail)
-    oneMegaInBytes=1048576
 
-    which telnet
+    which telnet > /dev/null
     telnetPresent=$?
-    which mailx
+    which mailx  > /dev/null
     mailxPresent=$?
-    which sendmail
+    which sendmail > /dev/null
     sendmailPresent=$?
 
-    printpi "\n Please enter the number in brackets to use one of these clients to send your mail:"
-    if [ "$telnetPresent" == 0 ]; then
-        printpi "\n telnet(1) - you need to have dcache.bugreporting.smtp property set to a reachable SMTP server."
+    printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
+    if [ $telnetPresent -eq 0 ]; then
+        printp "\ntelnet(1) - you need to have dcache.bugreporting.smtp property set to a reachable SMTP server."
+        printpi "Also uuencode needs to be present on the machine."
     fi
-    if [ "$mailxPresent" == 0 ]; then
-        printpi "\n mailx(2) - you need to have your local mail client configured"
+    if [ $mailxPresent -eq 0 ]; then
+        printp "\nmailx(2) - you need to have your local mail client configured"
     fi
-    if [ "$sendmailPresent" == 0 ]; then
-        printpi "\n sendmail(3) - you need to have your local mail client configured and uuencode installed."
+    if [ $sendmailPresent -eq 0 ]; then
+        printp "\nsendmail(3) - you need to have your local mail client configured and uuencode installed."
     fi
-    echo "\n Choice:"
+    echo "\nChoice:"
     read mailClientChoice
 
     if [ $mailClientChoice = 3 ]; then
         sendmail $2 <  $fileToSendViaMail
     else if [ $mailClientChoice = 2 ]; then
-        #cat $fileToSendViaMail | uuencode $fileToSendViaMail $combinedFileName | mailx -s "$3" $2
         tmpMailrc=$MAILRC
         from=$1 smtp=$smtpServer \
                   mailx -n -s "$3" \
@@ -1332,7 +1327,6 @@ case "$1" in
                 commandsToExecute="/usr/bin/uname -a;/usr/bin/java -version;/usr/local/bin/dcache version;"
 
                 files=$(getProperty dcache.bugreporting.paths)
-                echo $files
                 tmpReportPath=/tmp/dcache-bugreport
                 tmpReportfile=$tmpReportPath/bugReportFile.tmp
                 FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
@@ -1386,10 +1380,10 @@ case "$1" in
                                  if [[ $yesOrNo == "y" ]]; then
                                      addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
                                      addEntryToTableOfContent $tmpReportfile $index $file
-                                     printpi "\n File added: $pieceOfInfo$file \n"
-                                     index=`expr $index + 1`
+                                     printp "\nFile added: $pieceOfInfo$file\n"
+                                     index=$((index + 1))
                                  else
-                                     printpi "\n Chosen not to add $pieceOfInfo$file. \n"
+                                     printp "\nChosen not to add $pieceOfInfo$file.\n"
                                      continue;
                                  fi
                              done
@@ -1405,10 +1399,10 @@ case "$1" in
                              if [[ $yesOrNo == "y" ]]; then
                                  addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                                  addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-                                 printpi "\n File added: $pieceOfInfo \n"
-                                 index=`expr $index + 1`
+                                 printp "\n File added: $pieceOfInfo \n"
+                                 index=$((index + 1))
                              else
-                                 printpi "\n Chosen not to add $pieceOfInfo. \n"
+                                 printp "\n Chosen not to add $pieceOfInfo. \n"
                              fi
                         fi
                      done   # End of iterating over files to be published
@@ -1421,22 +1415,22 @@ case "$1" in
                 else
                     index=4
                     for pieceOfInfo in $files; do
-                        printpi "PieceOfInfo: $pieceOfInfo"
+                        printp "PieceOfInfo: $pieceOfInfo"
                         if [ -d $pieceOfInfo ]; then
                             filesInDirectory=$(ls $pieceOfInfo)
                             for file in $filesInDirectory; do
-                                printpi "\n Adding File in directory $pieceOfInfo: $file"
+                                printp "\nAdding File in directory $pieceOfInfo: $file"
                                 addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
                                 addEntryToTableOfContent $tmpReportfile $index $file
-                                printpi "\n File added: $pieceOfInfo$file \n"
-                                index=`expr $index + 1`
+                                printp "\nFile added: $pieceOfInfo$file \n"
+                                index=$(($index + 1))
                             done
                         else
-                            printpi "Adding single file: $pieceOfInfo"
+                            printp "Adding single file: $pieceOfInfo"
                             addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                             addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-                            printpi "\n File added: $pieceOfInfo \n"
-                            index=`expr $index + 1`
+                            printp "\n File added: $pieceOfInfo \n"
+                            index=$((index + 1))
                         fi
                     done
                      echo "Everything will be sent with the report. Please check the following file content."
@@ -1449,27 +1443,27 @@ case "$1" in
 
                  # Sending bugreport to support@dcache.org
 
-                printpi "Packing file $tmpReportfile"
+                printp "Packing file $tmpReportfile"
                 tarFile="$tmpReportfile.tar.gz"
                 tar czf $tarFile $tmpReportfile > /dev/null
 
-                printpi "Checking files size of $tarFile"
+                printp "Checking files size of $tarFile"
                 tarFileSizeMB=$(du -h "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
 
                 maxFileSize=$(getProperty dcache.bugreporting.reporter.file.size)
 
                 if [ $tarFileSizeMB -ge $maxFileSize ]; then
-                    printpi "This file is too big to be send via mail. We are trying to copy to the support SE."
+                    printp "This file is too big to be send via mail. We are trying to copy to the support SE."
                     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
                     url="$FQSN/bugReport-$timeStamp.tar.gz"
                     curl -f -T $tarFile $url
                     curlResult=$?
                     if [ "$curlResult" != 22 ]; then
-                        printpi "File was transfered to our support SE:  $url"
+                        printp "File was transfered to our support SE:  $url"
                     else
-                        printpi "File transfer to $url failed. dCache support SE might be down. Please report."
+                        printp "File transfer to $url failed. dCache support SE might be down. Please report."
                     fi
-                    printpi "Do you wish to send this report directly from your current machine [y/n]:"
+                    printp "Do you wish to send this report directly from your current machine [y/n]:"
                     read sendDirectByMail
                     # This needs to go into a function later
                     while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
@@ -1478,15 +1472,14 @@ case "$1" in
                         read sendDirectByMail
                     done
                     if [ "$sendDirectByMail" = "y" ]; then
-                        printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+                        printp "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
                         read senderMailAddress
-                        printpi "\n Please provide a short description of the bug (one line):"
+                        printp "\n Please provide a short description of the bug (one line):"
                         read shortDescription
-                        printpi "\n Now please describe the bug in more detail:"
+                        printp "\n Now please describe the bug in more detail:"
                         read longDescription
                         sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$url" "$tmpReportPath"
                     else
-                        #showFinalReportMessage $tmpReportfile $tarFile
                         echo "***************************************************************"
                         echo "* You can find the file with all the information here:"
                         echo "*"
@@ -1505,7 +1498,7 @@ case "$1" in
                         echo "***************************************************************"
                     fi
                 else
-                    printpi "Do you wish to send this report directly from your current machine [y/n]:"
+                    printp "Do you wish to send this report directly from your current machine [y/n]:"
                     read sendDirectByMail
                     # This needs to go into a function later
                     while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
@@ -1514,11 +1507,11 @@ case "$1" in
                         read sendDirectByMail
                     done
                     if [ "$sendDirectByMail" = "y" ]; then
-                        printpi "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+                        printp "\nWe will now send the bug report to  $supportEmail. Please provide your mail address:"
                         read senderMailAddress
-                        printpi "\n Please provide a short description of the bug (one line):"
+                        printp "\nPlease provide a short description of the bug (one line):"
                         read shortDescription
-                        printpi "\n Now please describe the bug in more detail:"
+                        printp "\nNow please describe the bug in more detail:"
                         read longDescription
                         sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tmpReportfile" "$tmpReportPath"
                     else
