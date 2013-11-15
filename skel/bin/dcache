@@ -354,7 +354,12 @@ poolDumpYaml() # $1 = domain, $2 = cell
     CLASSPATH="$classpath" quickJava org.dcache.pool.repository.MetaDataStoreYamlTool "$path" "$type"
 }
 
-createBasicBugReportFile() # $1 = filePath  $2 = prefix  $3 = tmpBugreportPath
+createBasicBugReportFile()
+# $1 = filePath
+# $2 = prefix
+# $3 = tmpBugreportPath
+# $4 = $descriptionOfCommand
+# $5 = $commandsToExecute
 {
     local tmpFilePath=$1
     local tmpPrefix=$2
@@ -366,26 +371,46 @@ createBasicBugReportFile() # $1 = filePath  $2 = prefix  $3 = tmpBugreportPath
         if [ ! -d "$tmpDirPath" ]; then
             mkdir -p  "$tmpDirPath"
         fi
-        if [ -f  "$tmpFilePath" ]; then
-            echo "File already exists: $tmpFilePath"
-            rm "$tmpFilePath"
-        fi
-        echo "Table of Content" >>  "$tmpFilePath"
-        echo "------------------------------------------" >>  "$tmpFilePath"
-        for (( i=0 ; i<${#descriptionOfCommand[@]} ; i++ ));
-        do
-            echo " ${descriptionOfCommand[i]}"  >>  "$tmpFilePath"
-        done
-        echo "----------endTableContent-----------------" >>  "$tmpFilePath"
-        echo "" >>  "$tmpFilePath"
 
-        for (( i=0 ; i<${#commandsToExecute[@]} ; i++ ));
-        do
-            echo ${descriptionOfCommand[i]} : >> "$tmpFilePath"
-            echo "------------------------------"  >> "$tmpFilePath"
-            ${commandsToExecute[i]} >> "$tmpFilePath" 2>&1
-            echo "" >>  "$tmpFilePath";
+        IFS=';'
+
+        (
+        echo "Table of Content"
+        echo "------------------------------------------"
+        j=0
+        for commandDesc in $descriptionOfCommand; do
+            ((j++))
+            echo "$j. $commandDesc"
         done
+        echo "----------endTableContent-----------------"
+        echo ""
+
+        unset IFS
+
+        numberOfCommandDescriptions=$(echo $descriptionOfCommand | tr ';' '\n' | wc -l | bc)
+        numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
+
+        if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
+            echo "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of of commands ($numberOfCommands)."
+        fi
+
+        i=0
+        numberOfCommands=$(expr "$numberOfCommands" - 1)
+
+        while [[ $i < $numberOfCommands ]]
+        do
+            ((i++))
+            head1=$(echo $descriptionOfCommand | cut -d ';' -f $i)
+            head2=$(echo $commandsToExecute | cut -d ';' -f $i)
+            echo $i. $head1
+            echo "----------------------"
+            echo "$head2"
+            $head2
+            echo
+        done
+
+        ) > "$tmpFilePath"
+        unset IFS
     fi
 
 }
@@ -411,7 +436,7 @@ addFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline
 addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
 {
     sed -ie '/endTableContent/ i\
-    \ '$2'. '$3' file
+    \'$2'. '$3' file
     ' $1
 }
 
@@ -1303,8 +1328,8 @@ case "$1" in
             bugreport)
                 supportEmail=$(getProperty dcache.bugreporting.supporter.email)
                 prefix=$(getProperty dcache.bugreporting.prefix)
-                declare -a descriptionOfCommand=("1. OS version, CPU architecture" "2. JVM version" "3. dCache version")
-                declare -a commandsToExecute=("uname -a" "java -version" "dcache version")
+                descriptionOfCommand="OS version, CPU architecture;JVM version;dCache version;"
+                commandsToExecute="/usr/bin/uname -a;/usr/bin/java -version;/usr/local/bin/dcache version;"
 
                 files=$(getProperty dcache.bugreporting.paths)
                 echo $files
@@ -1337,7 +1362,7 @@ case "$1" in
 
                 # Create basic information that will be included in any report
                 # Arrays $descriptionOfCommand $commandsToExecute are used inside this function
-                createBasicBugReportFile $tmpReportfile  $prefix $tmpReportPath
+                createBasicBugReportFile $tmpReportfile  $prefix $tmpReportPath $descriptionOfCommand $commandsToExecute
 
                 if [ "$choice" = "select" ]; then
                     echo ""
