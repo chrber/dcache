@@ -477,8 +477,8 @@ sendBugReportMail()
 
     printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
     if [ $telnetPresent -eq 0 ]; then
-        printp "\ntelnet(1) - you need to have dcache.bugreporting.smtp property set to a reachable SMTP server."
-        printpi "Also uuencode needs to be present on the machine."
+        printp "\ntelnet(1) - you need to have dcache.bugreporting.smtp property set to a reachable SMTP server.
+        Also uuencode needs to be present on the machine."
     fi
     if [ $mailxPresent -eq 0 ]; then
         printp "\nmailx(2) - you need to have your local mail client configured"
@@ -1406,10 +1406,8 @@ case "$1" in
                              fi
                         fi
                      done   # End of iterating over files to be published
-                     echo ""
-                     echo "Please check the following file content. By saving the file you give your"
-                     echo "consent to send everything that is in the file along with your bug report."
-                     echo "Press RETURN to continue:"
+                     printp "Please check the following file content. By saving the file you give your
+                            consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
                      read trash
                      vi $tmpReportfile
                 else
@@ -1426,10 +1424,10 @@ case "$1" in
                                 index=$(($index + 1))
                             done
                         else
-                            printp "Adding single file: $pieceOfInfo"
+                            echo "Adding single file: $pieceOfInfo"
                             addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                             addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-                            printp "\n File added: $pieceOfInfo \n"
+                            echo "\nFile added: $pieceOfInfo \n"
                             index=$((index + 1))
                         fi
                     done
@@ -1438,19 +1436,25 @@ case "$1" in
                      echo "along with your bug report."
                      echo "Press RETURN to continue:"
                      read trash
-                     vi $tmpReportfile
+                     if [ $EDITOR ]; then
+                        $EDITOR $tmpReportfile
+                     else
+                        vi $tmpReportfile
+                     fi
                 fi
 
                  # Sending bugreport to support@dcache.org
 
                 printp "Packing file $tmpReportfile"
                 tarFile="$tmpReportfile.tar.gz"
-                tar czf $tarFile $tmpReportfile > /dev/null
+                tar czf $tarFile "$tmpReportfile" > /dev/null
 
                 printp "Checking files size of $tarFile"
                 tarFileSizeMB=$(du -h "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
+                tarFileSizeMB=${tarFileSizeMB/\.*}
 
                 maxFileSize=$(getProperty dcache.bugreporting.reporter.file.size)
+                maxFileSize=${maxFileSize/\.*}
 
                 if [ $tarFileSizeMB -ge $maxFileSize ]; then
                     printp "This file is too big to be send via mail. We are trying to copy to the support SE."
@@ -1485,6 +1489,9 @@ case "$1" in
                         echo "*"
                         echo "*" $tmpReportfile
                         echo "*" $tarFile
+                        if [ ! -z "$url" ]; then
+                            echo "*  also stored at: $url"
+                        fi
                         echo "*"
                         echo "* Please take the file and attach it to an e-mail that you send to"
                         echo "*"
@@ -1520,7 +1527,10 @@ case "$1" in
                         echo "* You can find the file with all the information here:"
                         echo "*"
                         echo "*" $tmpReportfile
-                        echo "*" $tarFile also stored at: $url
+                        echo "*" $tarFile
+                        if [ ! -z "$url" ]; then
+                            echo "*  also stored at: $url"
+                        fi
                         echo "*"
                         echo "* Please take the file and attach it to an e-mail that you send to"
                         echo "*"
