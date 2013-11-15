@@ -356,37 +356,37 @@ poolDumpYaml() # $1 = domain, $2 = cell
 
 createBasicBugReportFile() # $1 = filePath  $2 = prefix  $3 = tmpBugreportPath
 {
-local tmpFilePath=$1
-local tmpPrefix=$2
-local tmpDirPath=$3
+    local tmpFilePath=$1
+    local tmpPrefix=$2
+    local tmpDirPath=$3
 
-if [ "`uname`" = "SunOS" ]; then
-    echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
-else
-    if [ ! -d $tmpDirPath ]; then
-        mkdir -p  $tmpDirPath
-    fi
-    if [ -f  $tmpFilePath ]; then
-        echo "File already exists: $tmpFilePath"
-        rm $tmpFilePath
-    fi
-    echo "Table of Content" >>  $tmpFilePath
-    echo "------------------------------------------" >>  $tmpFilePath
-    for (( i=0 ; i<${#descriptionOfCommand[@]} ; i++ ));
-    do
-        echo " ${descriptionOfCommand[i]}"  >>  $tmpFilePath
-    done
-    echo "----------endTableContent-----------------" >>  $tmpFilePath
-    echo "" >>  $tmpFilePath
+    if [ "$(uname)" = "SunOS" ]; then
+        echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
+    else
+        if [ ! -d "$tmpDirPath" ]; then
+            mkdir -p  "$tmpDirPath"
+        fi
+        if [ -f  "$tmpFilePath" ]; then
+            echo "File already exists: $tmpFilePath"
+            rm "$tmpFilePath"
+        fi
+        echo "Table of Content" >>  "$tmpFilePath"
+        echo "------------------------------------------" >>  "$tmpFilePath"
+        for (( i=0 ; i<${#descriptionOfCommand[@]} ; i++ ));
+        do
+            echo " ${descriptionOfCommand[i]}"  >>  "$tmpFilePath"
+        done
+        echo "----------endTableContent-----------------" >>  "$tmpFilePath"
+        echo "" >>  "$tmpFilePath"
 
-    for (( i=0 ; i<${#commandsToExecute[@]} ; i++ ));
-    do
-        echo ${descriptionOfCommand[i]} : >> $tmpFilePath
-        echo "------------------------------"  >> $tmpFilePath
-        ${commandsToExecute[i]} >> $tmpFilePath 2>&1
-        echo "" >>  $tmpFilePath;
-    done
-fi
+        for (( i=0 ; i<${#commandsToExecute[@]} ; i++ ));
+        do
+            echo ${descriptionOfCommand[i]} : >> "$tmpFilePath"
+            echo "------------------------------"  >> "$tmpFilePath"
+            ${commandsToExecute[i]} >> "$tmpFilePath" 2>&1
+            echo "" >>  "$tmpFilePath";
+        done
+    fi
 
 }
 
@@ -426,14 +426,14 @@ sendBugReportMail()
     local tmpDirPath=$6
     local tmpMailrc=$MAILRC
     local combinedFileName=combined.txt
-    local fileToSendViaMail=$tmpDirPath/$combinedFileName
+    local fileToSendViaMail="$tmpDirPath/$combinedFileName"
     local smtpServer=$(getProperty dcache.bugreporting.smtp)
 
     echo "Subject: $3 \n"
     echo "------------------------------------------"  >> "$fileToSendViaMail"
     echo "Long description of problem" > "$fileToSendViaMail"
     echo "------------------------------------------"  >> "$fileToSendViaMail"
-    echo "$4" >> $tmpDirPath/combined.txt
+    echo "$4" >> "$fileToSendViaMail"
     echo "------------------------------------------"  >> "$fileToSendViaMail"
     echo "\n"  >> "$fileToSendViaMail"
 
@@ -505,7 +505,7 @@ sendBugReportMail()
               count=2
               echo "Telnet done."
         done
-        rm -rf $tmpDirPath/*
+        rm -rf "$tmpDirPath"/*
         fi
         fi
     fi
