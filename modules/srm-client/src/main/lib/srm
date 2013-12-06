@@ -43,7 +43,6 @@ compare() {
         fi
 }
 
-
 setjavalocation() {
 
   for i in /usr /usr/local /usr/java /usr/local/java /opt  /opt/java /opt ; do
@@ -98,6 +97,19 @@ if [ "$SRM_PATH" = "" ]
     then
     echo SRM_PATH is not set >&2
     exit 1
+fi
+
+min_majorminor_version=51.0
+min_java_version=1.7
+javaMajorMinorVersion=$($JAVA_HOME/bin/java -jar $SRM_PATH/lib/VersionCheckerV1.1.jar $SRM_PATH/lib/ short|grep "Major.Minor Version"))
+javaMajorMinorVersion=${javaMajorMinorVersion:21:5}
+java_version=$($JAVA_HOME/bin/java -version 2>&1 |head -1| grep -P [1-9]\.[0-9] -o)
+java_compatibility_version=$($JAVA_HOME/bin/java -jar $SRM_PATH/lib/VersionCheckerV1.1.jar $SRM_PATH/lib/ short |grep -P Java\ [1-9]\.[0-9] -o| grep -P [1-9]\.[0-9] -o)
+rightVersion=$(echo "$java_compatibility_version==$java_version" | bc)
+if [ $rightVersion = 0 ]; then
+  echo "You are using the wrong Java version: $java_version, MajorMinor version: $javaMajorMinorVersion"
+  echo "Please use at least version: $min_majorminor_version, which is Java $min_java_version"
+  exit 1
 fi
 
 for i in $SRM_PATH/lib/*.jar
