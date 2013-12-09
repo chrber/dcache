@@ -99,16 +99,28 @@ if [ "$SRM_PATH" = "" ]
     exit 1
 fi
 
-min_majorminor_version=51.0
-min_java_version=1.7
-javaMajorMinorVersion=$($JAVA_HOME/bin/java -jar $SRM_PATH/lib/VersionCheckerV1.1.jar $SRM_PATH/lib/ short|grep "Major.Minor Version"))
+javaMajorMinorVersion=$($java_location -jar "$SRM_PATH/lib/versioncheck-1.1.jar" "$SRM_PATH/lib/" short|grep "Major.Minor Version")
 javaMajorMinorVersion=${javaMajorMinorVersion:21:5}
-java_version=$($JAVA_HOME/bin/java -version 2>&1 |head -1| grep -P [1-9]\.[0-9] -o)
-java_compatibility_version=$($JAVA_HOME/bin/java -jar $SRM_PATH/lib/VersionCheckerV1.1.jar $SRM_PATH/lib/ short |grep -P Java\ [1-9]\.[0-9] -o| grep -P [1-9]\.[0-9] -o)
-rightVersion=$(echo "$java_compatibility_version==$java_version" | bc)
-if [ $rightVersion = 0 ]; then
-  echo "You are using the wrong Java version: $java_version, MajorMinor version: $javaMajorMinorVersion"
-  echo "Please use at least version: $min_majorminor_version, which is Java $min_java_version"
+current_java_version=$($java_location -version 2>&1 |head -1| grep -P [1-9]\.[0-9] -o)
+java_compatibility_version=$($java_location -jar "$SRM_PATH/lib/versioncheck-1.1.jar" "$SRM_PATH/lib/" short |grep -P Java\ [1-9]\.[0-9] -o| grep -P [1-9]\.[0-9] -o)
+java_needed_version=0
+for i in $java_compatibility_version; do
+  i=$(echo $i | sed 's/.*\.//');
+  if [ 1 -eq `echo "${java_needed_version} < ${i}" | bc` ]; then
+    java_needed_version=$i
+  fi
+done
+java_needed_version=$(echo 1.$java_needed_version)
+rightVersion=`echo "$java_needed_version != $current_java_version" | bc`
+
+if [ "$DEBUG" = "true" ];
+then
+  echo All Java Version found in "$SRM_PATH/lib/": $java_compatibility_version
+  echo RightVersion: $rightVersion
+  echo Needed Java Version: $java_needed_version with MajorMinor: $javaMajorMinorVersion Current: $current_java_version
+fi
+if [[ $rightVersion = 1 ]]; then
+  echo "You are using the wrong Java version: $current_java_version with MajorMinor:$javaMajorMinorVersion, but you need: $java_needed_version"
   exit 1
 fi
 
