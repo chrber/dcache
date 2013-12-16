@@ -16,14 +16,13 @@ createBasicBugReportFile()
             mkdir -p  "$tmpDirPath"
         fi
 
-        IFS=';'
-
         (
+        IFS=';'
         echo "Table of Content"
         echo "------------------------------------------"
         j=0
         for commandDesc in $descriptionOfCommand; do
-            ((j++))
+            j=$((j+1))
             echo "$j. $commandDesc"
         done
         echo "----------endTableContent-----------------"
@@ -43,13 +42,13 @@ createBasicBugReportFile()
 
         while [[ $i < $numberOfCommands ]]
         do
-            ((i++))
+            i=$((i+1))
             head1=$(echo $descriptionOfCommand | cut -d ';' -f $i)
             head2=$(echo $commandsToExecute | cut -d ';' -f $i)
             echo $i. $head1
             echo "----------------------"
             echo "$head2"
-            $head2
+            $head2 2>&1
             echo
         done
 
@@ -59,7 +58,7 @@ createBasicBugReportFile()
 
 }
 
-addFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
+writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
 {
     local fileToAddPath=$1
     local bugReportFilePath=$2
@@ -78,6 +77,44 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
     sed -ie '/endTableContent/ i\
     \'$2'. '$3' file
     ' $1
+}
+
+addFileToBugReport $1 = fileURI
+{
+    local pieceOfInfo=$1
+    local tmpReportfile=$2
+    local index=$3
+
+    echo "Include $pieceOfInfo y/n:"
+    read yesOrNo
+    # This needs to go into a function later
+    while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+        echo "2 Please enter y for yes or n for no:"
+        echo "You entered:" $yesOrNo
+        read yesOrNo
+    done
+    if [[ $yesOrNo == "y" ]]; then
+        writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+        addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
+        printp "\n File added: $pieceOfInfo \n"
+        index=$((index + 1))
+    else
+        printp "\n Chosen not to add $pieceOfInfo. \n"
+    fi
+}
+
+addDirectoryToBugReport # $1 = directory  $2 = $tmpReportfile $3 = "$pieceOfInfo file" $4 = $index
+{
+    local directory = $1
+    local itemsInDir=$(ls $directory)
+
+    for pieceOfInfo in $itemsInDir; do
+        if [ -d $pieceOfInfo ]; then
+            addDirectoryToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+        else
+            addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+        fi
+    done   # End of iterating over files to be published
 }
 
 sendBugReportMail()
@@ -179,8 +216,8 @@ processBugReport()
 {
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
     prefix=$(getProperty dcache.bugreporting.prefix)
-    descriptionOfCommand="OS version, CPU architecture;JVM version;dCache version;"
-    commandsToExecute="/usr/bin/uname -a;/usr/bin/java -version;/usr/local/bin/dcache version;"
+    descriptionOfCommand=$(getProperty dcache.bugreporting.commands.description)
+    commandsToExecute=$(getProperty dcache.bugreporting.commands)
 
     files=$(getProperty dcache.bugreporting.paths)
     tmpReportPath=/tmp/dcache-bugreport
@@ -223,43 +260,9 @@ processBugReport()
         index=4
         for pieceOfInfo in $files; do
             if [ -d $pieceOfInfo ]; then
-                filesInDirectory=$(ls $pieceOfInfo)
-                for file in $filesInDirectory; do
-                    echo "Include $file y/n:"
-                     read yesOrNo
-                     # This need to go into a function later
-                     while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
-                         echo "1 Please enter y for yes or n for no:"
-                         echo "You entered:" $yesOrNo
-                         read yesOrNo
-                     done
-                     if [[ $yesOrNo == "y" ]]; then
-                         addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
-                         addEntryToTableOfContent $tmpReportfile $index $file
-                         printp "\nFile added: $pieceOfInfo$file\n"
-                         index=$((index + 1))
-                     else
-                         printp "\nChosen not to add $pieceOfInfo$file.\n"
-                         continue;
-                     fi
-                 done
+                addDirectoryToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
             else
-                 echo "Include $pieceOfInfo y/n:"
-                 read yesOrNo
-                 # This needs to go into a function later
-                 while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
-                     echo "2 Please enter y for yes or n for no:"
-                     echo "You entered:" $yesOrNo
-                     read yesOrNo
-                 done
-                 if [[ $yesOrNo == "y" ]]; then
-                     addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
-                     addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-                     printp "\n File added: $pieceOfInfo \n"
-                     index=$((index + 1))
-                 else
-                     printp "\n Chosen not to add $pieceOfInfo. \n"
-                 fi
+                addFileToBugreport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
             fi
          done   # End of iterating over files to be published
          printp "Please check the following file content. By saving the file you give your
