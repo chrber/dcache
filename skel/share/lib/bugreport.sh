@@ -103,18 +103,21 @@ addFileToBugReport $1 = fileURI
     fi
 }
 
-addDirectoryToBugReport # $1 = directory  $2 = $tmpReportfile $3 = "$pieceOfInfo file" $4 = $index
+addDirectoryToBugReport # $1 = directory  $2 = $tmpReportfile $3 = $index
 {
     local directory = $1
     local itemsInDir=$(ls $directory)
+    local tmpReportfile=$2
+    local index=$3
 
     for pieceOfInfo in $itemsInDir; do
         if [ -d $pieceOfInfo ]; then
-            addDirectoryToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+            addDirectoryToBugReport $pieceOfInfo $tmpReportfile $index
         else
-            addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+            index=$(addFileToBugReport $pieceOfInfo $tmpReportfile $index)
         fi
     done   # End of iterating over files to be published
+    echo $index
 }
 
 sendBugReportMail()
