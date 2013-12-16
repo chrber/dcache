@@ -22,6 +22,7 @@
 ##
 ##     http://devnet.jetbrains.com/docs/DOC-1186
 ##
+/intellij-projectfiles/
 /*.iml
 /modules/**/*.iml
 /packages/**/*.iml
