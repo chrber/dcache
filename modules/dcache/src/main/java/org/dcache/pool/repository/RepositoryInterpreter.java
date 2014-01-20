@@ -1,23 +1,18 @@
 package org.dcache.pool.repository;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.Serializable;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FileNotInCacheException;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.vehicles.StorageInfo;
-
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.DelayedReply;
 import dmg.util.Args;
 import dmg.util.Formats;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import dmg.cells.nucleus.CellCommandListener;
+import java.io.Serializable;
+import java.util.*;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -129,10 +124,57 @@ public class RepositoryInterpreter
     {
         if (args.argc() > 0) {
             StringBuilder sb   = new StringBuilder();
+            Map<String, Set<PnfsId>> exceptionToPnfsIdMap = new HashMap<String, Set<PnfsId>>();
+            Map<String, Set<String>> exceptionToMessageMap = new HashMap<String, Set<String>>();
             for (int i = 0; i < args.argc(); i++) {
                 PnfsId pnfsid = new PnfsId(args.argv(i));
-                sb.append(_repository.getEntry(pnfsid));
-                sb.append("\n");
+                CacheEntry fileEntry = null;
+                try {
+                    fileEntry = _repository.getEntry(pnfsid);
+                } catch (CacheException ce) {
+                    String exceptionClass = ce.getClass().toString();
+                    if ( ! exceptionToPnfsIdMap.containsKey( exceptionClass ) ) {
+                        HashSet<PnfsId> pnfsIdSet = new HashSet<PnfsId>();
+                        pnfsIdSet.add(pnfsid);
+                        exceptionToPnfsIdMap.put(exceptionClass, pnfsIdSet);
+                    } else {
+                        exceptionToPnfsIdMap.get(exceptionClass).add(pnfsid);
+                    }
+
+                    if ( ! exceptionToMessageMap.containsKey(exceptionClass) ) {
+                        HashSet<String> exceptionMessageSet = new HashSet<String>();
+                        exceptionToMessageMap.put(exceptionClass, exceptionMessageSet);
+                    } else {
+                        exceptionToMessageMap.get(exceptionClass).add(ce.getMessage());
+                    }
+                }
+                if (fileEntry == null) {
+                    sb.append("No file entry found for:");
+                    sb.append(pnfsid.toIdString());
+                    sb.append("\n");
+                } else {
+                    sb.append(fileEntry);
+                    sb.append("\n");
+                }
+            }
+            sb.append("Entries to the following PnfsIDs not found:\n");
+            for (String exceptionClass : exceptionToPnfsIdMap.keySet()) {
+                for (PnfsId pnfsId : exceptionToPnfsIdMap.get(exceptionClass)) {
+                    sb.append(pnfsId.toIdString());
+                    sb.append(" - due to: ");
+                    sb.append(exceptionClass);
+                    sb.append("\n");
+                }
+            }
+            sb.append("The following exceptions occured:\n");
+            for (String exceptionClass : exceptionToMessageMap.keySet()) {
+                sb.append(exceptionClass);
+                sb.append(":\n");
+                for (String exceptionMessage : exceptionToMessageMap.get(exceptionClass)) {
+                    sb.append("\t");
+                    sb.append(exceptionMessage);
+                    sb.append("\n");
+                }
             }
             return sb.toString();
         }
