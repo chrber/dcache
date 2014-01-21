@@ -126,6 +126,7 @@ public class RepositoryInterpreter
             StringBuilder sb   = new StringBuilder();
             Map<String, Set<PnfsId>> exceptionToPnfsIdMap = new HashMap<String, Set<PnfsId>>();
             Map<String, Set<String>> exceptionToMessageMap = new HashMap<String, Set<String>>();
+            sb.append("Entries found for following PnfsIDs:\n");
             for (int i = 0; i < args.argc(); i++) {
                 PnfsId pnfsid = new PnfsId(args.argv(i));
                 CacheEntry fileEntry = null;
@@ -149,28 +150,33 @@ public class RepositoryInterpreter
                     }
                 }
                 if (fileEntry == null) {
-                    sb.append("No file entry found for:");
-                    sb.append(pnfsid.toIdString());
-                    sb.append("\n");
+                    continue;
                 } else {
+                    sb.append("\t");
                     sb.append(fileEntry);
                     sb.append("\n");
                 }
             }
+            sb.append("\n");
             sb.append("Entries to the following PnfsIDs not found:\n");
             for (String exceptionClass : exceptionToPnfsIdMap.keySet()) {
                 for (PnfsId pnfsId : exceptionToPnfsIdMap.get(exceptionClass)) {
+                    sb.append("\t");
                     sb.append(pnfsId.toIdString());
-                    sb.append(" - due to: ");
+                    sb.append(" due to: ");
                     sb.append(exceptionClass);
                     sb.append("\n");
                 }
             }
+            sb.append("\n");
             sb.append("The following exceptions occured:\n");
             for (String exceptionClass : exceptionToMessageMap.keySet()) {
+                sb.append("\n");
+                sb.append("\t");
                 sb.append(exceptionClass);
                 sb.append(":\n");
                 for (String exceptionMessage : exceptionToMessageMap.get(exceptionClass)) {
+                    sb.append("\t");
                     sb.append("\t");
                     sb.append(exceptionMessage);
                     sb.append("\n");
