@@ -124,17 +124,17 @@ public class RepositoryInterpreter
     {
         if (args.argc() > 0) {
             StringBuilder sb   = new StringBuilder();
-            List<FileNotInCacheException> cacheExceptions = new ArrayList<>();
+            List<String> cacheExceptions = new ArrayList<>();
             for (int i = 0; i < args.argc(); i++) {
                 PnfsId pnfsid = new PnfsId(args.argv(i));
                 try {
                     sb.append(_repository.getEntry(pnfsid));
                     sb.append("\n");
                 } catch (FileNotInCacheException fnice) {
-                    cacheExceptions.add(fnice);
+                    cacheExceptions.add(fnice.getMessage());
                 }
             }
-            for (FileNotInCacheException cacheException : cacheExceptions) {
+            for (String cacheException : cacheExceptions) {
                 sb.append(cacheException).append("\n");
             }
             return sb.toString();
