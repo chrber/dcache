@@ -1,3 +1,5 @@
+DEBUG=1
+
 createBasicBugReportFile()
 # $1 = filePath
 # $2 = prefix
@@ -12,6 +14,7 @@ createBasicBugReportFile()
     if [ "$(uname)" = "SunOS" ]; then
         echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
     else
+        echo "Creating bug reporting temp directory: " $tmpDirPath
         if [ ! -d "$tmpDirPath" ]; then
             mkdir -p  "$tmpDirPath"
         fi
@@ -79,11 +82,18 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
     ' $1
 }
 
-addFileToBugReport $1 = fileURI
+addFileToBugReport() # $1 = fileURI
 {
     local pieceOfInfo=$1
     local tmpReportfile=$2
     local index=$3
+
+    if [ $DEBUG == 1 ]; then
+        echo Function: addFileToBugReport
+        echo "PieceOfInfo: $pieceOfInfo"
+        echo "TmpReportFile: $tmpReportfile"
+        echo "Index: $index\n"
+    fi
 
     echo "Include $pieceOfInfo y/n:"
     read yesOrNo
@@ -103,7 +113,7 @@ addFileToBugReport $1 = fileURI
     fi
 }
 
-addDirectoryToBugReport # $1 = directory  $2 = $tmpReportfile $3 = $index
+addDirectoryToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = $index
 {
     local directory = $1
     local itemsInDir=$(ls $directory)
@@ -262,10 +272,16 @@ processBugReport()
         echo ""
         index=4
         for pieceOfInfo in $files; do
+            if [ $DEBUG == 1 ]; then
+                echo "PieceOfInfo: $pieceOfInfo"
+                echo "TmpReportFile: $tmpReportfile"
+                echo "Content header: $pieceOfInfo file"
+                echo "Index: $index"
+            fi
             if [ -d $pieceOfInfo ]; then
                 addDirectoryToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
             else
-                addFileToBugreport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+                addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
             fi
          done   # End of iterating over files to be published
          printp "Please check the following file content. By saving the file you give your
