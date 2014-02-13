@@ -1,4 +1,5 @@
-DEBUG=1
+DEBUG=0
+#set -x
 
 createBasicBugReportFile()
 # $1 = filePath
@@ -82,14 +83,15 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
     ' $1
 }
 
-addFileToBugReport() # $1 = fileURI
+addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $4 = index
 {
     local pieceOfInfo=$1
     local tmpReportfile=$2
-    local index=$3
+    local index=$4
 
     if [ $DEBUG == 1 ]; then
-        echo Function: addFileToBugReport
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo "Function: addFileToBugReport"
         echo "PieceOfInfo: $pieceOfInfo"
         echo "TmpReportFile: $tmpReportfile"
         echo "Index: $index\n"
@@ -107,27 +109,74 @@ addFileToBugReport() # $1 = fileURI
         writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
         addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
         printp "\n File added: $pieceOfInfo \n"
-        index=$((index + 1))
     else
         printp "\n Chosen not to add $pieceOfInfo. \n"
     fi
 }
 
-addDirectoryToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = $index
+addAllFilesInDirectory() # $1 = directory
 {
-    local directory = $1
-    local itemsInDir=$(ls $directory)
-    local tmpReportfile=$2
-    local index=$3
-
-    for pieceOfInfo in $itemsInDir; do
-        if [ -d $pieceOfInfo ]; then
-            addDirectoryToBugReport $pieceOfInfo $tmpReportfile $index
+    allFilesInDirectory=$(ls $item)
+    for itemInDir in $allFilesInDirectory; do
+        if [ -d $itemInDir ]; then
+            addItemToBugReport $itemInDir $tmpReportfile $index
         else
-            index=$(addFileToBugReport $pieceOfInfo $tmpReportfile $index)
+            writeFileToBugReport $item/$itemInDir $tmpReportfile "$item/$itemInDir file" $index
+            addEntryToTableOfContent $tmpReportfile $index $item/$itemInDir
+            printp "\n File added: $item/$itemInDir \n"
         fi
-    done   # End of iterating over files to be published
-    echo $index
+    done
+}
+
+addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = content header $4 = index
+{
+    local item=$1
+    local tmpReportfile=$2
+    local index=$4
+
+    if [ $DEBUG == 1 ]; then
+        echo "************************************"
+        echo "Function: addItemToBugReport"
+        echo "Item: $item"
+        echo "TmpReportFile: $tmpReportfile"
+        echo "Index: $index\n"
+    fi
+
+    # refine logic here as there can be files coming as pieceOfInfo, this should not be
+
+    if [ -d $item ]; then
+        if [ $DEBUG == 1 ]; then
+            echo "Adding directory: $item"
+        fi
+        echo "Include entire directory $item y/n:"
+        read yesOrNo
+        # This needs to go into a function later
+        while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+            echo "2 Please enter y for yes or n for no:"
+            echo "You entered:" $yesOrNo
+            read yesOrNo
+        done
+        if [[ $yesOrNo == "y" ]]; then
+            addAllFilesInDirectory $item $tmpReportfile $index
+        else
+            local itemsInDir=$(ls $item)
+            for itemInDir in $itemsInDir; do
+                addItemToBugReport $item/$itemInDir $tmpReportfile $index
+            done
+        fi
+    else
+        if [ $DEBUG == 1 ]; then
+                echo "Adding file: $item"
+        fi
+        addFileToBugReport $item $tmpReportfile $index
+        index=$(($index + 1))
+    fi
+    echo "$index"
+}
+
+checkForYesOrNo() # yesOrNo = $1
+{
+    echo "Not implemented"
 }
 
 sendBugReportMail()
@@ -278,11 +327,7 @@ processBugReport()
                 echo "Content header: $pieceOfInfo file"
                 echo "Index: $index"
             fi
-            if [ -d $pieceOfInfo ]; then
-                addDirectoryToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
-            else
-                addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
-            fi
+            addItemToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
          done   # End of iterating over files to be published
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
@@ -306,7 +351,7 @@ processBugReport()
                 addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                 addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
                 echo "\nFile added: $pieceOfInfo \n"
-                index=$((index + 1))
+                index=$(($index + 1))
             fi
         done
          echo "Everything will be sent with the report. Please check the following file content."
