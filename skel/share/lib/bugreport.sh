@@ -1,4 +1,4 @@
-DEBUG=0
+DEBUG=1
 #set -x
 index=0
 
@@ -13,10 +13,19 @@ createBasicBugReportFile()
     local descriptionOfCommand="$3"
     local commandsToExecute="$4"
 
+    numberOfCommandDescriptions=$(echo $descriptionOfCommand | tr ';' '\n' | wc -l | bc)
+    numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
+
+    if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
+        printp "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of of commands ($numberOfCommands)."
+    fi
+
+    index=$numberOfCommands
+
     if [ "$(uname)" = "SunOS" ]; then
         echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
     else
-        echo "Creating bug reporting temp directory: " $tmpDirPath
+        printp "Creating bug reporting temp directory:  $tmpDirPath"
         if [ ! -d "$tmpDirPath" ]; then
             mkdir -p  "$tmpDirPath"
         fi
@@ -35,13 +44,6 @@ createBasicBugReportFile()
 
         unset IFS
 
-        numberOfCommandDescriptions=$(echo $descriptionOfCommand | tr ';' '\n' | wc -l | bc)
-        numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
-
-        if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
-            echo "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of of commands ($numberOfCommands)."
-        fi
-
         i=0
         numberOfCommands=$(expr "$numberOfCommands" - 1)
 
@@ -59,9 +61,10 @@ createBasicBugReportFile()
 
         ) > "$tmpFilePath"
         unset IFS
-        echo "$index"
     fi
-
+    if [ $DEBUG == 1 ]; then
+        printp "Create basic bugreport, index at: $index"
+    fi
 }
 
 writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
@@ -69,6 +72,14 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
     local fileToAddPath=$1
     local bugReportFilePath=$2
     local headline=$3
+
+    if [ $DEBUG == 1 ]; then
+       printp "Printing file"
+       printp "File to add:  $fileToAddPath"
+       printp "BugReport file: $bugReportFilePath"
+       printp "Headline: $headline"
+    fi
+
 
     (echo $index. $headline
     echo "------------------------------"
@@ -109,6 +120,10 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
         writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
         addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
         if [ $DEBUG == 1 ]; then
+            printp "Index currently is: $index"
+        fi
+        index=$(($index + 1))
+        if [ $DEBUG == 1 ]; then
             printp "\n File added: $pieceOfInfo \n"
         fi
     else
@@ -118,6 +133,14 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
     fi
 }
 
+addFileToBugReportWithoutQuestion() # $1 = fileURI $2 = tmpReportfile $3 = index
+{
+    local pieceOfInfo=$1
+    local tmpReportfile=$2
+
+    writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+}
+
 addAllFilesInDirectory() # $1 = directory
 {
     allFilesInDirectory=$(ls $item)
@@ -125,9 +148,10 @@ addAllFilesInDirectory() # $1 = directory
         if [ -d $itemInDir ]; then
             addItemToBugReport $itemInDir $tmpReportfile $index
         else
-            writeFileToBugReport $item/$itemInDir $tmpReportfile "$item$itemInDir file" $index
-            addEntryToTableOfContent $tmpReportfile $index $item$itemInDir
-            printp "\n File added: $item$itemInDir \n"
+            writeFileToBugReport $item/$itemInDir $tmpReportfile "$item/$itemInDir file" $index
+            addEntryToTableOfContent $tmpReportfile $index $item/$itemInDir
+            index=$(($index + 1))
+            printp "\n File added: $item/$itemInDir \n"
         fi
     done
 }
@@ -152,7 +176,7 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
         if [ $DEBUG == 1 ]; then
             echo "Adding directory: $item"
         fi
-        echo "Include entire directory $item y/n:"
+        echo "Include entire directory $item yes (y) / select one by one (s) / no (n):"
         read yesOrNo
         # This needs to go into a function later
         while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
@@ -165,7 +189,7 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
         else
             local itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
-                addItemToBugReport $item/$itemInDir $tmpReportfile $index
+                addItemToBugReport $item$itemInDir $tmpReportfile $index
             done
         fi
     else
@@ -174,7 +198,6 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
             echo "BEFORE - Index now at: $index"
         fi
         addFileToBugReport $item $tmpReportfile $index
-        index=$(($index + 1))
         if [ $DEBUG == 1 ]; then
             echo "AFTER Index now at: $index"
         fi
@@ -317,7 +340,7 @@ processBugReport()
 
     # Create basic information that will be included in any report
     # Arrays $descriptionOfCommand $commandsToExecute are used inside this function
-    index=$( createBasicBugReportFile "$tmpReportfile" "$tmpReportPath" "$descriptionOfCommand" "$commandsToExecute" )
+    createBasicBugReportFile "$tmpReportfile" "$tmpReportPath" "$descriptionOfCommand" "$commandsToExecute"
 
     if [ "$choice" = "select" ]; then
         echo ""
@@ -325,7 +348,6 @@ processBugReport()
         echo "piece by piece. Please choose yes(y) or no(n) to include or NOT include"
         echo "the file."
         echo ""
-        index=4
         for pieceOfInfo in $files; do
             if [ $DEBUG == 1 ]; then
                 echo "PieceOfInfo: $pieceOfInfo"
@@ -340,21 +362,26 @@ processBugReport()
          read trash
          vi $tmpReportfile
     else
-        index=4
+        if [ $DEBUG == 1 ]; then
+            printp "Adding everything to the report"
+            printp "Files are: $files"
+        fi
         for pieceOfInfo in $files; do
-            printp "PieceOfInfo: $pieceOfInfo"
+            if [ $DEBUG == 1 ]; then
+                printp "PieceOfInfo: $pieceOfInfo"
+            fi
             if [ -d $pieceOfInfo ]; then
                 filesInDirectory=$(ls $pieceOfInfo)
                 for file in $filesInDirectory; do
                     printp "\nAdding File in directory $pieceOfInfo: $file"
-                    addFileToBugReport $pieceOfInfo$file $tmpReportfile "$file file" $index
+                    addFileToBugReportWithoutQuestion $pieceOfInfo/$file $tmpReportfile $index
                     addEntryToTableOfContent $tmpReportfile $index $file
                     printp "\nFile added: $pieceOfInfo$file \n"
                     index=$(($index + 1))
                 done
             else
                 echo "Adding single file: $pieceOfInfo"
-                addFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+                addFileToBugReportWithoutQuestion $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                 addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
                 echo "\nFile added: $pieceOfInfo \n"
                 index=$(($index + 1))
