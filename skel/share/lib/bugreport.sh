@@ -1,16 +1,17 @@
 DEBUG=0
 #set -x
+index=0
 
 createBasicBugReportFile()
 # $1 = filePath
-# $2 = prefix
-# $3 = tmpBugreportPath
-# $4 = $descriptionOfCommand
-# $5 = $commandsToExecute
+# $2 = tmpBugreportPath
+# $3 = descriptionOfCommand
+# $4 = commandsToExecute
 {
-    local tmpFilePath=$1
-    local tmpPrefix=$2
-    local tmpDirPath=$3
+    local tmpFilePath="$1"
+    local tmpDirPath="$2"
+    local descriptionOfCommand="$3"
+    local commandsToExecute="$4"
 
     if [ "$(uname)" = "SunOS" ]; then
         echo "Bug reporting not implemented yet. Ask Christian to do that if needed."
@@ -58,6 +59,7 @@ createBasicBugReportFile()
 
         ) > "$tmpFilePath"
         unset IFS
+        echo "$index"
     fi
 
 }
@@ -67,7 +69,6 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
     local fileToAddPath=$1
     local bugReportFilePath=$2
     local headline=$3
-    local index=$4
 
     (echo $index. $headline
     echo "------------------------------"
@@ -83,11 +84,10 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
     ' $1
 }
 
-addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $4 = index
+addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
 {
     local pieceOfInfo=$1
     local tmpReportfile=$2
-    local index=$4
 
     if [ $DEBUG == 1 ]; then
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -108,9 +108,13 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $4 = index
     if [[ $yesOrNo == "y" ]]; then
         writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
         addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-        printp "\n File added: $pieceOfInfo \n"
+        if [ $DEBUG == 1 ]; then
+            printp "\n File added: $pieceOfInfo \n"
+        fi
     else
-        printp "\n Chosen not to add $pieceOfInfo. \n"
+        if [ $DEBUG == 1 ]; then
+            printp "\n Chosen not to add $pieceOfInfo. \n"
+        fi
     fi
 }
 
@@ -121,18 +125,18 @@ addAllFilesInDirectory() # $1 = directory
         if [ -d $itemInDir ]; then
             addItemToBugReport $itemInDir $tmpReportfile $index
         else
-            writeFileToBugReport $item/$itemInDir $tmpReportfile "$item/$itemInDir file" $index
-            addEntryToTableOfContent $tmpReportfile $index $item/$itemInDir
-            printp "\n File added: $item/$itemInDir \n"
+            writeFileToBugReport $item/$itemInDir $tmpReportfile "$item$itemInDir file" $index
+            addEntryToTableOfContent $tmpReportfile $index $item$itemInDir
+            printp "\n File added: $item$itemInDir \n"
         fi
     done
 }
 
-addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = content header $4 = index
+addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
 {
-    local item=$1
-    local tmpReportfile=$2
-    local index=$4
+    local item="$1"
+    local tmpReportfile="$2"
+
 
     if [ $DEBUG == 1 ]; then
         echo "************************************"
@@ -166,12 +170,15 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = content header $
         fi
     else
         if [ $DEBUG == 1 ]; then
-                echo "Adding file: $item"
+            echo "Adding file: $item"
+            echo "BEFORE - Index now at: $index"
         fi
         addFileToBugReport $item $tmpReportfile $index
         index=$(($index + 1))
+        if [ $DEBUG == 1 ]; then
+            echo "AFTER Index now at: $index"
+        fi
     fi
-    echo "$index"
 }
 
 checkForYesOrNo() # yesOrNo = $1
@@ -277,7 +284,6 @@ sendBugReportMail()
 processBugReport()
 {
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
-    prefix=$(getProperty dcache.bugreporting.prefix)
     descriptionOfCommand=$(getProperty dcache.bugreporting.commands.description)
     commandsToExecute=$(getProperty dcache.bugreporting.commands)
 
@@ -311,7 +317,7 @@ processBugReport()
 
     # Create basic information that will be included in any report
     # Arrays $descriptionOfCommand $commandsToExecute are used inside this function
-    createBasicBugReportFile $tmpReportfile  $prefix $tmpReportPath $descriptionOfCommand $commandsToExecute
+    index=$( createBasicBugReportFile "$tmpReportfile" "$tmpReportPath" "$descriptionOfCommand" "$commandsToExecute" )
 
     if [ "$choice" = "select" ]; then
         echo ""
@@ -327,7 +333,7 @@ processBugReport()
                 echo "Content header: $pieceOfInfo file"
                 echo "Index: $index"
             fi
-            addItemToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
+            addItemToBugReport $pieceOfInfo $tmpReportfile $index
          done   # End of iterating over files to be published
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
