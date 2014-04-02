@@ -27,7 +27,7 @@
 /modules/**/*.iml
 /packages/**/*.iml
 /plugins/**/*.iml
-/.idea/
+/**/.idea/
 
 
 ## Ignore Mac generated files, wherever they are
