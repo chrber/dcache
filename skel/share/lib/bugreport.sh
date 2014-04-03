@@ -35,10 +35,8 @@ createBasicBugReportFile()
         echo "Table of Content"
         echo "------------------------------------------"
         j=0
-        for commandDesc in $descriptionOfCommand; do
-            j=$((j+1))
-            echo "$j. $commandDesc"
-        done
+
+
         echo "----------endTableContent-----------------"
         echo ""
 
@@ -93,6 +91,31 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
     sed -ie '/endTableContent/ i\
     \'$2'. '$3' file
     ' $1
+}
+
+addHeapDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+{
+    local heapDumpCommand="dcache dump heap $3 $1"
+
+    addEntryToTableOfContent $1 $index "$heapDumpCommand"
+    $heapDumpCommand
+    index=$(($index + 1))
+}
+
+addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+{
+    local threadDumpCommand="dcache dump threads $domains"
+    addEntryToTableOfContent $1 $index $threadDumpCommand
+
+    (echo $index. $threadDumpCommand
+    echo "------------------------------"
+    echo ""
+    $threadDumpCommand
+    echo "") >>  $1;
+
+    index=$(($index + 1))
+
+
 }
 
 addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
@@ -179,18 +202,21 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
         echo "Include entire directory $item yes (y) / select one by one (s) / no (n):"
         read yesOrNo
         # This needs to go into a function later
-        while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
-            echo "2 Please enter y for yes or n for no:"
+        while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ] && ! [ "$yesOrNo" = "s" ]; do
+            echo "Please enter y for yes or n for no or s for selecting one by one:"
             echo "You entered:" $yesOrNo
             read yesOrNo
         done
         if [[ $yesOrNo == "y" ]]; then
             addAllFilesInDirectory $item $tmpReportfile $index
-        else
+        fi
+        if [[ $yesOrNo == "s" ]]; then
             local itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
-                addItemToBugReport $item$itemInDir $tmpReportfile $index
+                addItemToBugReport $item/$itemInDir $tmpReportfile $index
             done
+        else
+            echo "Not adding any files of directory $item"
         fi
     else
         if [ $DEBUG == 1 ]; then
@@ -315,6 +341,31 @@ processBugReport()
     tmpReportfile=$tmpReportPath/bugReportFile.tmp
     FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
 
+    if [ $# -ne 0 ]; then
+
+        command=$1
+        shift
+        filesFromCommandLine="$@"
+        if [ $DEBUG == 1 ]; then
+            printp "Command added: $command"
+            printp "Files added as parameters: $filesFromCommandLine"
+        fi
+
+        if [ "$command" = "add" ]; then
+            if [ $DEBUG == 1 ]; then
+                echo "Command add"
+            fi
+            files="$files $filesFromCommandLine"
+        fi
+
+        if [ "$command" = "only" ]; then
+            if [ $DEBUG == 1 ]; then
+                echo "Command only"
+            fi
+            files=$filesFromCommandLine
+        fi
+    fi
+
     echo ""
     echo "Submitting Bug Report"
     echo "***********************************************"
@@ -373,30 +424,50 @@ processBugReport()
             if [ -d $pieceOfInfo ]; then
                 filesInDirectory=$(ls $pieceOfInfo)
                 for file in $filesInDirectory; do
-                    printp "\nAdding File in directory $pieceOfInfo: $file"
+                    if [ $DEBUG == 1 ]; then
+                        echo "\nAdding File in directory $pieceOfInfo: $file"
+                    fi
                     addFileToBugReportWithoutQuestion $pieceOfInfo/$file $tmpReportfile $index
                     addEntryToTableOfContent $tmpReportfile $index $file
                     printp "\nFile added: $pieceOfInfo$file \n"
                     index=$(($index + 1))
                 done
             else
-                echo "Adding single file: $pieceOfInfo"
+                if [ $DEBUG == 1 ]; then
+                    echo "Adding single file: $pieceOfInfo"
+                fi
                 addFileToBugReportWithoutQuestion $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                 addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
                 echo "\nFile added: $pieceOfInfo \n"
                 index=$(($index + 1))
             fi
         done
-         echo "Everything will be sent with the report. Please check the following file content."
-         echo "By saving the file you give your consent to send everything that is in the file"
-         echo "along with your bug report."
-         echo "Press RETURN to continue:"
-         read trash
-         if [ $EDITOR ]; then
-            $EDITOR $tmpReportfile
-         else
-            vi $tmpReportfile
-         fi
+
+        echo "Include thread dump y/n:"
+        read yesOrNo
+        while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+            echo "Please enter y for yes or n for no:"
+            echo "You entered:" $yesOrNo
+            read yesOrNo
+        done
+        if [[ $yesOrNo == "y" ]]; then
+            echo "These are the domains on your machine:"
+            echo $(getProperty dcache.domains)
+            echo "Please provide a space separated list of domains, which will be included in the dump:"
+            read domains
+            addThreadDump $tmpReportfile $index $domains
+        fi
+
+        echo "Everything will be sent with the report. Please check the following file content."
+        echo "By saving the file you give your consent to send everything that is in the file"
+        echo "along with your bug report."
+        echo "Press RETURN to continue:"
+        read trash
+        if [ $EDITOR ]; then
+           $EDITOR $tmpReportfile
+        else
+           vi $tmpReportfile
+        fi
     fi
 
      # Sending bugreport to support@dcache.org

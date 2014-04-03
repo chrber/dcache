@@ -63,7 +63,7 @@ usage()
     echo "   status"
     echo "   stop [<domain>]..."
     echo "   version"
-    echo "   submit bugreport"
+    echo "   submit bugreport [add <file1>[ <fileX>] | only <file1>[ <fileX>]]"
     echo
     echo "Size is specified in bytes, or optionally followed by K, M, G or T"
     echo "for powers of 1024. Size is rounded down to the nearest integer"
@@ -1145,7 +1145,7 @@ case "$1" in
         shift
         case "$command" in
             bugreport)
-                processBugReport
+                processBugReport "$@"
             ;;
             *)
         esac
