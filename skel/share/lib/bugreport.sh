@@ -36,6 +36,10 @@ createBasicBugReportFile()
         echo "------------------------------------------"
         j=0
 
+        for commandDesc in $descriptionOfCommand; do
+            j=$((j+1))
+            echo "$j. $commandDesc"
+        done
 
         echo "----------endTableContent-----------------"
         echo ""
