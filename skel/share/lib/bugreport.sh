@@ -1,6 +1,41 @@
-DEBUG=1
+DEBUG=0
 #set -x
 index=0
+
+addHeapDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+{
+    local heapdumpFile=$(getProperty dcache.bugreporting.heapdumpfile)
+    local heapDumpCommand="dcache dump heap $3 $heapdumpFile"
+
+    echo "File to dump to: $heapdumpFile"
+
+    addEntryToTableOfContent $1 $index "Heap-Dump"
+    #$heapDumpCommand
+    (echo $index. $heapDumpCommand
+    echo "------------------------------"
+    echo ""
+    echo "Please find the heap dump in the tarball that was created with this bug report."
+    echo "") >>  $1;
+    index=$(($index + 1))
+}
+
+addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+{
+    local threadDumpCommand="dcache dump threads $domains"
+    addEntryToTableOfContent $1 $index $threadDumpCommand
+
+    threadDumpConfirmMessage=$( $threadDumpCommand )
+
+    echo "CONFIRM: $threadDumpConfirmMessage"
+
+    (echo $index. $threadDumpCommand
+    echo "------------------------------"
+    echo ""
+    $threadDumpCommand
+    echo "") >>  $1;
+
+    index=$(($index + 1))
+}
 
 createBasicBugReportFile()
 # $1 = filePath
@@ -17,7 +52,7 @@ createBasicBugReportFile()
     numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
 
     if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
-        printp "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of of commands ($numberOfCommands)."
+        printp "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of commands ($numberOfCommands)."
     fi
 
     index=$numberOfCommands
@@ -27,7 +62,8 @@ createBasicBugReportFile()
     else
         printp "Creating bug reporting temp directory:  $tmpDirPath"
         if [ ! -d "$tmpDirPath" ]; then
-            mkdir -p  "$tmpDirPath"
+            timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
+            mkdir -p  "$tmpDirPath/$timeStamp"
         fi
 
         (
@@ -67,6 +103,21 @@ createBasicBugReportFile()
     if [ $DEBUG == 1 ]; then
         printp "Create basic bugreport, index at: $index"
     fi
+
+    echo "Do you wish to include a thread dump in this report y/n:"
+    read yesOrNo
+    while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+        echo "Please enter y for yes or n for no:"
+        echo "You entered:" $yesOrNo
+        read yesOrNo
+    done
+    if [[ $yesOrNo == "y" ]]; then
+        echo "These are the domains on your machine:"
+        echo $(getProperty dcache.domains)
+        echo "Please provide a space separated list of domains, which will be included in the dump:"
+        read domains
+        addThreadDump $tmpReportfile $index $domains
+    fi
 }
 
 writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
@@ -93,33 +144,8 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
 addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
 {
     sed -ie '/endTableContent/ i\
-    \'$2'. '$3' file
+    \'$2'. '$3'
     ' $1
-}
-
-addHeapDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
-{
-    local heapDumpCommand="dcache dump heap $3 $1"
-
-    addEntryToTableOfContent $1 $index "$heapDumpCommand"
-    $heapDumpCommand
-    index=$(($index + 1))
-}
-
-addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
-{
-    local threadDumpCommand="dcache dump threads $domains"
-    addEntryToTableOfContent $1 $index $threadDumpCommand
-
-    (echo $index. $threadDumpCommand
-    echo "------------------------------"
-    echo ""
-    $threadDumpCommand
-    echo "") >>  $1;
-
-    index=$(($index + 1))
-
-
 }
 
 addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
@@ -151,11 +177,11 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
         fi
         index=$(($index + 1))
         if [ $DEBUG == 1 ]; then
-            printp "\n File added: $pieceOfInfo \n"
+            printp "File added: $pieceOfInfo"
         fi
     else
         if [ $DEBUG == 1 ]; then
-            printp "\n Chosen not to add $pieceOfInfo. \n"
+            printp "Chosen not to add $pieceOfInfo."
         fi
     fi
 }
@@ -232,11 +258,6 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
             echo "AFTER Index now at: $index"
         fi
     fi
-}
-
-checkForYesOrNo() # yesOrNo = $1
-{
-    echo "Not implemented"
 }
 
 sendBugReportMail()
@@ -341,7 +362,7 @@ processBugReport()
     commandsToExecute=$(getProperty dcache.bugreporting.commands)
 
     files=$(getProperty dcache.bugreporting.paths)
-    tmpReportPath=/tmp/dcache-bugreport
+    tmpReportPath=$(getProperty dcache.bugreporting.tmpfilepath)
     tmpReportfile=$tmpReportPath/bugReportFile.tmp
     FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
 
@@ -433,7 +454,7 @@ processBugReport()
                     fi
                     addFileToBugReportWithoutQuestion $pieceOfInfo/$file $tmpReportfile $index
                     addEntryToTableOfContent $tmpReportfile $index $file
-                    printp "\nFile added: $pieceOfInfo$file \n"
+                    printp "File added: $pieceOfInfo/$file"
                     index=$(($index + 1))
                 done
             else
@@ -442,12 +463,12 @@ processBugReport()
                 fi
                 addFileToBugReportWithoutQuestion $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
                 addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-                echo "\nFile added: $pieceOfInfo \n"
+                echo "File added: $pieceOfInfo"
                 index=$(($index + 1))
             fi
         done
 
-        echo "Include thread dump y/n:"
+        echo "Include heap dump y/n:"
         read yesOrNo
         while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
             echo "Please enter y for yes or n for no:"
@@ -459,7 +480,7 @@ processBugReport()
             echo $(getProperty dcache.domains)
             echo "Please provide a space separated list of domains, which will be included in the dump:"
             read domains
-            addThreadDump $tmpReportfile $index $domains
+            addHeapDump $tmpReportfile $index $domains
         fi
 
         echo "Everything will be sent with the report. Please check the following file content."
