@@ -1,6 +1,9 @@
 DEBUG=1
 #set -x
 index=0
+heapdumps=""
+threaddumps=""
+
 
 addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
 {
@@ -42,14 +45,13 @@ addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
     addEntryToTableOfContent $1 $index "Thread-Dump"
 
     threadDumpConfirmMessage=$( $threadDumpCommand )
-
-    echo "CONFIRM: $threadDumpConfirmMessage"
+    echo "Please add the files to your report:\n$threadDumpConfirmMessage"
 
     (echo
     echo $index. $threadDumpCommand
     echo "------------------------------"
     echo ""
-    $threadDumpCommand
+    echo "$threadDumpConfirmMessage"
     echo "") >>  $1;
 
     index=$(($index + 1))
@@ -527,18 +529,23 @@ processBugReport()
     # Sending bugreport to support@dcache.org
 
     printp "Packing file $tmpReportfile"
-    tarFile="$tmpReportfile.tar.gz"
-    tar czf $tarFile "$tmpReportfile" > /dev/null
+    tarFile="$tmpReportPath.tar.gz"
+    tar czf $tarFile "$tmpReportPath" > /dev/null
 
-    printp "Checking files size of $tarFile"
-    tarFileSizeMB=$(du -h "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
+    echo "Checking files size of $tarFile"
+    tarFileSizeMB=$(du -hm "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
     tarFileSizeMB=${tarFileSizeMB/\.*}
+    echo "Deleting tmp bug report directory: $tmpReportPath"
+    rm -rf $tmpReportPath
 
     maxFileSize=$(getProperty dcache.bugreporting.reporter.file.size)
     maxFileSize=${maxFileSize/\.*}
 
     if [ $tarFileSizeMB -ge $maxFileSize ]; then
-        printp "This file is too big to be send via mail. We are trying to copy to the support SE."
+        printp "This file is too big to be send via mail.
+                You have set maximum size to: $maxFileSize MB
+                The file size of $tarFile is $tarFileSizeMB MB
+                We are trying to copy to the support SE."
         timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
         url="$FQSN/bugReport-$timeStamp.tar.gz"
         curl -f -T $tarFile $url
