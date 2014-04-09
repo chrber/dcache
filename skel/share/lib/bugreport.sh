@@ -1,34 +1,52 @@
-DEBUG=0
+DEBUG=1
 #set -x
 index=0
 
-addHeapDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
 {
-    local heapdumpFile=$(getProperty dcache.bugreporting.heapdumpfile)
-    local heapDumpCommand="dcache dump heap $3 $heapdumpFile"
+    local bugReportFile=$1
+    local domains=$2
+    local heapdumpFile=$3
 
-    echo "File to dump to: $heapdumpFile"
 
-    addEntryToTableOfContent $1 $index "Heap-Dump"
-    #$heapDumpCommand
-    (echo $index. $heapDumpCommand
-    echo "------------------------------"
-    echo ""
-    echo "Please find the heap dump in the tarball that was created with this bug report."
-    echo "") >>  $1;
-    index=$(($index + 1))
+    if [ $DEBUG == 1 ]; then
+        echo "Heap dumping!!!"
+        echo "Using bug report file: $bugReportFile"
+        echo "Using HeapDump file template: $heapdumpFile"
+        echo "For domains: $domains"
+    fi
+
+    for domain in $domains; do
+        domainHeapdumpFile="$heapdumpFile-$domain"
+        heapDumpCommand="dcache dump heap $domain $domainHeapdumpFile"
+
+        if [ $DEBUG == 1 ]; then
+            echo "For domain: $domain create file: $domainHeapdumpFile"
+            echo "Executing heap dump command: $heapDumpCommand"
+        fi
+
+        addEntryToTableOfContent $bugReportFile $index "Heap-Dump"
+        $heapDumpCommand
+        (echo $index. $heapDumpCommand
+        echo "------------------------------"
+        echo ""
+        echo "Please find the heap dump in the tarball that is created with this bug report."
+        echo "") >>  $bugReportFile;
+        index=$(($index + 1))
+    done
 }
 
 addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
 {
     local threadDumpCommand="dcache dump threads $domains"
-    addEntryToTableOfContent $1 $index $threadDumpCommand
+    addEntryToTableOfContent $1 $index "Thread-Dump"
 
     threadDumpConfirmMessage=$( $threadDumpCommand )
 
     echo "CONFIRM: $threadDumpConfirmMessage"
 
-    (echo $index. $threadDumpCommand
+    (echo
+    echo $index. $threadDumpCommand
     echo "------------------------------"
     echo ""
     $threadDumpCommand
@@ -53,6 +71,7 @@ createBasicBugReportFile()
 
     if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
         printp "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of commands ($numberOfCommands)."
+        exit 1;
     fi
 
     index=$numberOfCommands
@@ -62,8 +81,7 @@ createBasicBugReportFile()
     else
         printp "Creating bug reporting temp directory:  $tmpDirPath"
         if [ ! -d "$tmpDirPath" ]; then
-            timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
-            mkdir -p  "$tmpDirPath/$timeStamp"
+            mkdir -p  "$tmpDirPath"
         fi
 
         (
@@ -83,7 +101,6 @@ createBasicBugReportFile()
         unset IFS
 
         i=0
-        numberOfCommands=$(expr "$numberOfCommands" - 1)
 
         while [[ $i < $numberOfCommands ]]
         do
@@ -112,9 +129,9 @@ createBasicBugReportFile()
         read yesOrNo
     done
     if [[ $yesOrNo == "y" ]]; then
-        echo "These are the domains on your machine:"
+        echo "\nThese are the domains on your machine:"
         echo $(getProperty dcache.domains)
-        echo "Please provide a space separated list of domains, which will be included in the dump:"
+        echo "\nPlease provide a space separated list of domains, which will be included in the dump:"
         read domains
         addThreadDump $tmpReportfile $index $domains
     fi
@@ -363,7 +380,11 @@ processBugReport()
 
     files=$(getProperty dcache.bugreporting.paths)
     tmpReportPath=$(getProperty dcache.bugreporting.tmpfilepath)
+    timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
+    tmpReportPath=$tmpReportPath/$timeStamp
     tmpReportfile=$tmpReportPath/bugReportFile.tmp
+    heapdumpFileName=$(getProperty dcache.bugreporting.heapdumpfile.name)
+    tmpHeapdumpFile=$tmpReportPath/$heapdumpFileName
     FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
 
     if [ $# -ne 0 ]; then
@@ -436,7 +457,11 @@ processBugReport()
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
          read trash
-         vi $tmpReportfile
+         if [ $EDITOR ]; then
+           $EDITOR $tmpReportfile
+        else
+           vi $tmpReportfile
+        fi
     else
         if [ $DEBUG == 1 ]; then
             printp "Adding everything to the report"
@@ -468,21 +493,6 @@ processBugReport()
             fi
         done
 
-        echo "Include heap dump y/n:"
-        read yesOrNo
-        while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
-            echo "Please enter y for yes or n for no:"
-            echo "You entered:" $yesOrNo
-            read yesOrNo
-        done
-        if [[ $yesOrNo == "y" ]]; then
-            echo "These are the domains on your machine:"
-            echo $(getProperty dcache.domains)
-            echo "Please provide a space separated list of domains, which will be included in the dump:"
-            read domains
-            addHeapDump $tmpReportfile $index $domains
-        fi
-
         echo "Everything will be sent with the report. Please check the following file content."
         echo "By saving the file you give your consent to send everything that is in the file"
         echo "along with your bug report."
@@ -495,7 +505,26 @@ processBugReport()
         fi
     fi
 
-     # Sending bugreport to support@dcache.org
+    echo "Include heap dump y/n:"
+    read yesOrNo
+    while ! [ "$yesOrNo" = "y" ] && ! [ "$yesOrNo" = "n" ]; do
+        echo "Please enter y for yes or n for no:"
+        echo "You entered:" $yesOrNo
+        read yesOrNo
+    done
+    if [[ $yesOrNo == "y" ]]; then
+        echo "These are the domains on your machine:"
+        echo $(getProperty dcache.domains)
+        echo
+        echo "Please provide a space separated list of domains, which will be included in the dump:"
+        read domains
+        if [ $DEBUG == 1 ]; then
+            echo "Calling addHeapDump with parameters: $tmpReportfile $domains $tmpHeapdumpFile"
+        fi
+        addHeapDump "$tmpReportfile" "$domains" "$tmpHeapdumpFile"
+    fi
+
+    # Sending bugreport to support@dcache.org
 
     printp "Packing file $tmpReportfile"
     tarFile="$tmpReportfile.tar.gz"
