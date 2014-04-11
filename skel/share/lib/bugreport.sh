@@ -12,7 +12,7 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
     local heapdumpFile=$3
 
 
-    if [ $DEBUG == 1 ]; then
+    if [ $DEBUG = 1 ]; then
         echo "Heap dumping!!!"
         echo "Using bug report file: $bugReportFile"
         echo "Using HeapDump file template: $heapdumpFile"
@@ -23,7 +23,7 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
         domainHeapdumpFile="$heapdumpFile-$domain"
         heapDumpCommand="dcache dump heap $domain $domainHeapdumpFile"
 
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             echo "For domain: $domain create file: $domainHeapdumpFile"
             echo "Executing heap dump command: $heapDumpCommand"
         fi
@@ -119,7 +119,7 @@ createBasicBugReportFile()
         ) > "$tmpFilePath"
         unset IFS
     fi
-    if [ $DEBUG == 1 ]; then
+    if [ $DEBUG = 1 ]; then
         printp "Create basic bugreport, index at: $index"
     fi
 
@@ -130,7 +130,7 @@ createBasicBugReportFile()
         echo "You entered:" $yesOrNo
         read yesOrNo
     done
-    if [[ $yesOrNo == "y" ]]; then
+    if [[ $yesOrNo = "y" ]]; then
         echo "\nThese are the domains on your machine:"
         echo $(getProperty dcache.domains)
         echo "\nPlease provide a space separated list of domains, which will be included in the dump:"
@@ -145,7 +145,7 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
     local bugReportFilePath=$2
     local headline=$3
 
-    if [ $DEBUG == 1 ]; then
+    if [ $DEBUG = 1 ]; then
        printp "Printing file"
        printp "File to add:  $fileToAddPath"
        printp "BugReport file: $bugReportFilePath"
@@ -172,7 +172,7 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
     local pieceOfInfo=$1
     local tmpReportfile=$2
 
-    if [ $DEBUG == 1 ]; then
+    if [ $DEBUG = 1 ]; then
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
         echo "Function: addFileToBugReport"
         echo "PieceOfInfo: $pieceOfInfo"
@@ -188,18 +188,18 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
         echo "You entered:" $yesOrNo
         read yesOrNo
     done
-    if [[ $yesOrNo == "y" ]]; then
+    if [[ $yesOrNo = "y" ]]; then
         writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
         addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             printp "Index currently is: $index"
         fi
         index=$(($index + 1))
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             printp "File added: $pieceOfInfo"
         fi
     else
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             printp "Chosen not to add $pieceOfInfo."
         fi
     fi
@@ -234,7 +234,7 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
     local tmpReportfile="$2"
 
 
-    if [ $DEBUG == 1 ]; then
+    if [ $DEBUG = 1 ]; then
         echo "************************************"
         echo "Function: addItemToBugReport"
         echo "Item: $item"
@@ -245,7 +245,7 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
     # refine logic here as there can be files coming as pieceOfInfo, this should not be
 
     if [ -d $item ]; then
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             echo "Adding directory: $item"
         fi
         echo "Include entire directory $item yes (y) / select one by one (s) / no (n):"
@@ -256,10 +256,10 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
             echo "You entered:" $yesOrNo
             read yesOrNo
         done
-        if [[ $yesOrNo == "y" ]]; then
+        if [[ $yesOrNo = "y" ]]; then
             addAllFilesInDirectory $item $tmpReportfile $index
         fi
-        if [[ $yesOrNo == "s" ]]; then
+        if [[ $yesOrNo = "s" ]]; then
             local itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
                 addItemToBugReport $item/$itemInDir $tmpReportfile $index
@@ -268,12 +268,12 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
             echo "Not adding any files of directory $item"
         fi
     else
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             echo "Adding file: $item"
             echo "BEFORE - Index now at: $index"
         fi
         addFileToBugReport $item $tmpReportfile $index
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             echo "AFTER Index now at: $index"
         fi
     fi
@@ -284,32 +284,17 @@ sendBugReportMail()
 # $2 = destination mail address
 # $3 = short description of problem
 # $4 = long description of problem
-# $5 = bug report file OR URL
-# $6 = tmpDirPath
+# $5 = URL to tarfile on bugreport SE
+# $6 = tar file
 {
-    local tmpDirPath=$6
     local tmpMailrc=$MAILRC
-    local combinedFileName=combined.txt
-    local fileToSendViaMail="$tmpDirPath/$combinedFileName"
+    local sender=$1
+    local destination=$2
+    local shortDescription=$3
+    local longDescription=$4
+    local fileUrlOnSE="$5"
+    local tarFilePath="$6"
     local smtpServer=$(getProperty dcache.bugreporting.smtp)
-
-    (echo "Subject: $3 \n"
-    echo "------------------------------------------"
-    echo "Long description of problem"
-    echo "------------------------------------------"
-    echo "$4"
-    echo "------------------------------------------"
-    echo "\n"
-    ) > "$fileToSendViaMail"
-    if [ -f  $5 ]; then
-        echo "$5" >> "$fileToSendViaMail"
-    else
-        (echo "------------------------------------------"
-        echo "Bugreport file URL on dCache SE: $5       "
-        echo "------------------------------------------"
-        echo "\n"
-        ) >> "$fileToSendViaMail"
-    fi
 
     which telnet > /dev/null
     telnetPresent=$?
@@ -333,36 +318,54 @@ sendBugReportMail()
     read mailClientChoice
 
     if [ $mailClientChoice = 3 ]; then
-        sendmail $2 <  $fileToSendViaMail
+        sendmail $2 <  $tarFilePath
     else if [ $mailClientChoice = 2 ]; then
         tmpMailrc=$MAILRC
         from=$1 smtp=$smtpServer \
                   mailx -n -s "$3" \
-                  $2 < $fileToSendViaMail
+                  $2 < $tarFilePath
         MAILRC=$tmpMailrc
 
     else if [ $mailClientChoice = 1 ]; then
         count=1
+        if [ $DEBUG = 1 ]; then
+            echo "tar file path to be base64 encoded: $tarFilePath"
+        fi
+        uuencodedFile=$(uuencode -m $tarFilePath $(basename $tarFilePath))
         while [ $count = 1 ]
         do
             ( echo open $smtpServer 25
-              sleep 12
-              echo "helo desy.de"
-              echo "MAIL From: $1"
-              echo "RCPT To:<$2>"
-              echo "DATA"
-              echo "To: <$2>"
-              echo "From: $1 "
+              sleep 5
+              echo 'helo $smtpServer'
+              sleep 5
+              echo "MAIL From: $sender"
+              echo "RCPT To: $destination"
+              echo 'DATA'
+              sleep 5
+              echo "From: $1"
+              echo "To: $2"
               echo "Subject: $3"
               echo "MIME-Version: 1.0"
-              echo 'Content-Type: multipart/mixed; boundary="-q1w2e3r4t5"'
-              echo
-              echo '---q1w2e3r4t5'
-              echo 'Content-Type: application; name="'$(basename $fileToSendViaMail)'"'
+              echo "Content-Type: multipart/mixed; boundary=\"-q1w2e3r4t5\""
+              echo "---q1w2e3r4t5"
+              echo "Content-Transfer-Encoding: quoted-printable"
+              echo "Content-Type: text/plain; charset=us-ascii"
+              echo "------------------------------------------"
+              echo "Long description of problem"
+              echo "------------------------------------------"
+              echo "$longDescription"
+              echo ""
+              echo "----------------------------------------------"
+              echo "Bugreport file URL on dCache SE: $fileUrlOnSE"
+              echo "-----------------------------------------------"
+              echo "\n"
+              echo "---q1w2e3r4t5"
+              echo "---q1w2e3r4t5"
+              echo "Content-Disposition: attachment; filename=\"$(basename $tarFilePath)\""
+              echo "Content-Type: application/x-gzip;name=\"$(basename $tarFilePath)\""
               echo "Content-Transfer-Encoding: base64"
-              echo 'Content-Disposition: attachment; filename="'$(basename $fileToSendViaMail)'"'
-              uuencode -m $fileToSendViaMail $(basename $fileToSendViaMail)
-              echo '---q1w2e3r4t5--'
+              echo "$uuencodedFile"
+              echo "---q1w2e3r4t5"
               echo "."
               echo "quit") | telnet
               count=2
@@ -372,6 +375,33 @@ sendBugReportMail()
         fi
         fi
     fi
+}
+
+showFinalReportMessage() # $1 = URL  $2 = tarfile
+{
+    echo "***************************************************************"
+    if [ -f "$2" ]; then
+        echo "* You can find the file with all the information here:"
+        echo "*"
+        echo "* $2"
+        echo "*"
+    fi
+    if [ ! -z "$1" ]; then
+        echo "*"
+        echo "* The report tar file has been stored on our bugreport SE:\n"
+        echo "* $url"
+    fi
+    echo "*"
+    echo "* Please take the file and attach it to an e-mail that you send to"
+    echo "*"
+    echo "*   $supportEmail"
+    echo "*"
+    echo "* and write a short description of the bug in the subject line and the long"
+    echo "* description in the body of the e-mail."
+    echo "*"
+    echo "* Thank you very much that you took the time to report."
+    echo "*"
+    echo "***************************************************************"
 }
 
 processBugReport()
@@ -394,20 +424,20 @@ processBugReport()
         command=$1
         shift
         filesFromCommandLine="$@"
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             printp "Command added: $command"
             printp "Files added as parameters: $filesFromCommandLine"
         fi
 
         if [ "$command" = "add" ]; then
-            if [ $DEBUG == 1 ]; then
+            if [ $DEBUG = 1 ]; then
                 echo "Command add"
             fi
             files="$files $filesFromCommandLine"
         fi
 
         if [ "$command" = "only" ]; then
-            if [ $DEBUG == 1 ]; then
+            if [ $DEBUG = 1 ]; then
                 echo "Command only"
             fi
             files=$filesFromCommandLine
@@ -448,7 +478,7 @@ processBugReport()
         echo "the file."
         echo ""
         for pieceOfInfo in $files; do
-            if [ $DEBUG == 1 ]; then
+            if [ $DEBUG = 1 ]; then
                 echo "PieceOfInfo: $pieceOfInfo"
                 echo "TmpReportFile: $tmpReportfile"
                 echo "Content header: $pieceOfInfo file"
@@ -465,18 +495,18 @@ processBugReport()
            vi $tmpReportfile
         fi
     else
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             printp "Adding everything to the report"
             printp "Files are: $files"
         fi
         for pieceOfInfo in $files; do
-            if [ $DEBUG == 1 ]; then
+            if [ $DEBUG = 1 ]; then
                 printp "PieceOfInfo: $pieceOfInfo"
             fi
             if [ -d $pieceOfInfo ]; then
                 filesInDirectory=$(ls $pieceOfInfo)
                 for file in $filesInDirectory; do
-                    if [ $DEBUG == 1 ]; then
+                    if [ $DEBUG = 1 ]; then
                         echo "\nAdding File in directory $pieceOfInfo: $file"
                     fi
                     addFileToBugReportWithoutQuestion $pieceOfInfo/$file $tmpReportfile $index
@@ -485,7 +515,7 @@ processBugReport()
                     index=$(($index + 1))
                 done
             else
-                if [ $DEBUG == 1 ]; then
+                if [ $DEBUG = 1 ]; then
                     echo "Adding single file: $pieceOfInfo"
                 fi
                 addFileToBugReportWithoutQuestion $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
@@ -514,13 +544,13 @@ processBugReport()
         echo "You entered:" $yesOrNo
         read yesOrNo
     done
-    if [[ $yesOrNo == "y" ]]; then
+    if [[ $yesOrNo = "y" ]]; then
         echo "These are the domains on your machine:"
         echo $(getProperty dcache.domains)
         echo
         echo "Please provide a space separated list of domains, which will be included in the dump:"
         read domains
-        if [ $DEBUG == 1 ]; then
+        if [ $DEBUG = 1 ]; then
             echo "Calling addHeapDump with parameters: $tmpReportfile $domains $tmpHeapdumpFile"
         fi
         addHeapDump "$tmpReportfile" "$domains" "$tmpHeapdumpFile"
@@ -530,7 +560,7 @@ processBugReport()
 
     printp "Packing file $tmpReportfile"
     tarFile="$tmpReportPath.tar.gz"
-    tar czf $tarFile "$tmpReportPath" > /dev/null
+    tar czf $tarFile -C "$tmpReportPath" . > /dev/null
 
     echo "Checking files size of $tarFile"
     tarFileSizeMB=$(du -hm "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
@@ -564,35 +594,18 @@ processBugReport()
             read sendDirectByMail
         done
         if [ "$sendDirectByMail" = "y" ]; then
-            printp "\n We will now send the bug report to  $supportEmail. Please provide your mail address:"
+            printp "\nWe will now send the bug report to  $supportEmail. Please provide your mail address ($(getProperty dcache.bugreporting.reporter.email)):"
             read senderMailAddress
             printp "\n Please provide a short description of the bug (one line):"
             read shortDescription
             printp "\n Now please describe the bug in more detail:"
             read longDescription
-            sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$url" "$tmpReportPath"
+            sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$url" "$tarFile"
+            rm -f "$tarFile"
         else
-            echo "***************************************************************"
-            echo "* You can find the file with all the information here:"
-            echo "*"
-            echo "*" $tmpReportfile
-            echo "*" $tarFile
-            if [ ! -z "$url" ]; then
-                echo "*  also stored at: $url"
-            fi
-            echo "*"
-            echo "* Please take the file and attach it to an e-mail that you send to"
-            echo "*"
-            echo "*   $supportEmail"
-            echo "*"
-            echo "* and write a short description of the bug in the subject line and the long"
-            echo "* description in the body of the e-mail."
-            echo "*"
-            echo "* Thank you very much that you took the time to report."
-            echo "*"
-            echo "***************************************************************"
+            showFinalReportMessage $url $tarFile
         fi
-    else
+    else   # tar file is small enough to be sent by e-mail
         printp "Do you wish to send this report directly from your current machine [y/n]:"
         read sendDirectByMail
         # This needs to go into a function later
@@ -602,34 +615,22 @@ processBugReport()
             read sendDirectByMail
         done
         if [ "$sendDirectByMail" = "y" ]; then
-            printp "\nWe will now send the bug report to  $supportEmail. Please provide your mail address:"
+            standardReporterAddress=$(getProperty dcache.bugreporting.reporter.email)
+            printp "\nWe will now send the bug report to $supportEmail. The mail will be sent using $standardReporterAddress, please specify a different address, if desired:"
             read senderMailAddress
+            if [ "$senderMailAddress" = "" ]; then
+                senderMailAddress=$standardReporterAddress
+            fi
+            if [ $DEBUG = 1 ]; then
+                echo "Reporter e-mail set to: $senderMailAddress"
+            fi
             printp "\nPlease provide a short description of the bug (one line):"
             read shortDescription
             printp "\nNow please describe the bug in more detail:"
             read longDescription
-            sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tmpReportfile" "$tmpReportPath"
+            sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$tarFile" "$tarFile"
         else
-            #showFinalReportMessage $tmpReportfile $tarFile
-            echo "***************************************************************"
-            echo "* You can find the file with all the information here:"
-            echo "*"
-            echo "*" $tmpReportfile
-            echo "*" $tarFile
-            if [ ! -z "$url" ]; then
-                echo "*  also stored at: $url"
-            fi
-            echo "*"
-            echo "* Please take the file and attach it to an e-mail that you send to"
-            echo "*"
-            echo "*   $supportEmail"
-            echo "*"
-            echo "* and write a short description of the bug in the subject line and the long"
-            echo "* description in the body of the e-mail."
-            echo "*"
-            echo "* Thank you very much that you took the time to report."
-            echo "*"
-            echo "***************************************************************"
+            showFinalReportMessage $url
         fi
     fi
 }
