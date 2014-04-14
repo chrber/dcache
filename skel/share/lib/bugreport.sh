@@ -338,8 +338,8 @@ sendBugReportMail()
               sleep 5
               echo 'helo $smtpServer'
               sleep 5
-              echo "MAIL From: $sender"
-              echo "RCPT To: $destination"
+              echo "MAIL From: $1"
+              echo "RCPT To: $2"
               echo 'DATA'
               sleep 5
               echo "From: $1"
