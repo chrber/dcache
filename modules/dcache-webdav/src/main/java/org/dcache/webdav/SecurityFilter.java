@@ -26,7 +26,8 @@ import java.util.Objects;
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
-
+import io.milton.http.*;
+import io.milton.servlet.ServletRequest;
 import org.dcache.auth.LoginReply;
 import org.dcache.auth.LoginStrategy;
 import org.dcache.auth.Origin;
@@ -36,6 +37,17 @@ import org.dcache.auth.attributes.LoginAttribute;
 import org.dcache.auth.attributes.ReadOnly;
 import org.dcache.auth.attributes.RootDirectory;
 import org.dcache.util.CertificateFactories;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
+import javax.servlet.http.HttpServletRequest;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.security.PrivilegedAction;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.util.Arrays.asList;
@@ -188,6 +200,13 @@ public class SecurityFilter implements Filter
             } catch (URISyntaxException e) {
                 throw new CacheException(e.getMessage(), e);
             }
+        FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
+        if (fullRequestPath.toString().contains("/status.php")) {
+            _log.info("/status.php was detected in path");
+            return;
+        }
+        if (!fullRequestPath.startsWith(_rootPath)) {
+            throw new PermissionDeniedCacheException("Permission denied");
         }
     }
 
