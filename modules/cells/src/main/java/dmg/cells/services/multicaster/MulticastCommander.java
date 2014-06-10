@@ -8,7 +8,8 @@ import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellNucleus;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
+
+import org.dcache.util.Args;
 
 public class MulticastCommander extends CellAdapter {
 
@@ -115,7 +116,7 @@ public class MulticastCommander extends CellAdapter {
       thisMsg.getDestinationPath().add( _path ) ;
       thisMsg.nextDestination() ;
       thisMsg.setMessageObject( open ) ;
-      CellMessage reply = sendAndWait( thisMsg  , 5000 ) ;
+       CellMessage reply = getNucleus().sendAndWait(thisMsg, (long) 5000);
       if( reply == null ){
           return "Reply timed out" ;
       }else{

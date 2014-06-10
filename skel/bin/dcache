@@ -30,11 +30,12 @@ usage()
     echo "   alarm add    (interactive)"
     echo "   alarm modify (interactive)"
     echo "   alarm remove (interactive)"
-    echo "   billing [-files] <path>|<pnfsid>|<dn>"
+    echo "   billing [--format=raw|files|json|yaml] [--since=DATE] [--until=DATE] [-f=<file>] [<path>|<pnfsid>|<dn>]..."
     echo "   check-config"
     echo "   condrestart [<domain>]..."
     echo "   database ls"
     echo "   database update [<cell>@<domain>]..."
+    echo "   database showUpdateSQL [<cell>@<domain>]..."
     echo "   database tag <tag> [<cell>@<domain>]..."
     echo "   database rollback <tag> [<cell>@<domain>]..."
     echo "   database rollbackToDate <date/time> [<cell>@<domain>]..."
@@ -187,7 +188,7 @@ parseOptions() # $1 = list of valid options
             usage
         fi
 
-        eval "opt_${name}=${value}"
+        eval "opt_${name}=\"${value}\""
 
         shift
         count=$((${count}+1))
@@ -936,14 +937,8 @@ case "$1" in
                                 user=$(getScopedProperty db.user "$domain" "$cell")
                                 changelog=$(getScopedProperty db.schema.changelog "$domain" "$cell")
                                 database=$(getScopedProperty db.name "$domain" "$cell")
-                                partitions=$(getScopedProperty db.connections.partition-count "$domain" "$cell")
-                                if [ -z "$partitions" ]; then
-                                    maxConnections=$(getScopedProperty db.connections.max "$domain" "$cell")
-                                    minConnections=$(getScopedProperty db.connections.min "$domain" "$cell")
-                                else
-                                    maxConnections=$(( $partitions * $(getScopedProperty db.connections.max-per-partition "$domain" "$cell") ))
-                                    minConnections=$(( $partitions * $(getScopedProperty db.connections.min-per-partition "$domain" "$cell") ))
-                                fi
+                                maxConnections=$(getScopedProperty db.connections.max "$domain" "$cell")
+                                minConnections=$(getScopedProperty db.connections.min "$domain" "$cell")
                                 if [ -n "$maxConnections" ]; then
                                     totalMaxConnections=$(( $totalMaxConnections + $maxConnections ))
                                 fi
@@ -976,6 +971,19 @@ case "$1" in
                             if hasManagedDatabase "$domain" "$cell"; then
                                 printf "%s: \n" "$cell@$domain"
                                 liquibase "$domain" "$cell" update
+                            fi
+                        fi
+                    done
+                done
+                ;;
+
+            showUpdateSQL)
+                for domain in $(getProperty dcache.domains); do
+                    for cell in $(getProperty dcache.domain.cells "$domain"); do
+                        if [ $# -eq 0 ] || matchesAny "$cell@$domain" "$@"; then
+                            if hasManagedDatabase "$domain" "$cell"; then
+                                printf "%s: \n" "$cell@$domain"
+                                liquibase "$domain" "$cell" updateSQL
                             fi
                         fi
                     done
@@ -1083,11 +1091,27 @@ case "$1" in
 
     billing)
         shift
-        if [ $# -eq 0 ]; then
-            usage
-        fi
         . ${lib}/billing.sh
-        billing_find ${opt_files:+-files} "$@"
+
+        parseOptions "format since until f" "$@" || shift $?
+
+        case "${opt_format}" in
+            "")
+                billing_find ${opt_f:+-f="${opt_f}"} ${opt_since:+-since="${opt_since}"} ${opt_until:+-until="${opt_until}"} "$@"
+                ;;
+            raw)
+                billing_find ${opt_f:+-f="${opt_f}"} ${opt_since:+-since="${opt_since}"} ${opt_until:+-until="${opt_until}"} "$@"
+                ;;
+            files)
+                billing_find -files ${opt_f:+-f="${opt_f}"} ${opt_since:+-since="${opt_since}"} ${opt_until:+-until="${opt_until}"} "$@"
+                ;;
+            json)
+                billing_find -json ${opt_f:+-f="${opt_f}"} ${opt_since:+-since="${opt_since}"} ${opt_until:+-until="${opt_until}"} "$@"
+                ;;
+            yaml)
+                billing_find -yaml ${opt_f:+-f="${opt_f}"} ${opt_since:+-since="${opt_since}"} ${opt_until:+-until="${opt_until}"} "$@"
+                ;;
+        esac
         ;;
 
     loader)

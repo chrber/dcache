@@ -44,23 +44,22 @@ import diskCacheV111.vehicles.ProtocolInfo;
 import diskCacheV111.vehicles.QuotaMgrCheckQuotaMessage;
 import diskCacheV111.vehicles.StorageInfo;
 
+import dmg.cells.nucleus.AbstractCellComponent;
 import dmg.cells.nucleus.CellAddressCore;
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellMessage;
-import dmg.cells.nucleus.CellPath;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.CellVersion;
 import dmg.cells.nucleus.DelayedReply;
-import dmg.util.Args;
 
-import dmg.cells.nucleus.AbstractCellComponent;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.Partition;
 import org.dcache.poolmanager.PoolInfo;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.poolmanager.PoolSelector;
 import org.dcache.poolmanager.Utils;
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 import org.dcache.vehicles.FileAttributes;
 
@@ -90,7 +89,7 @@ public class PoolManagerV5
     private WatchdogThread     _watchdog;
 
     private boolean _quotasEnabled;
-    private String  _quotaManager  = "none";
+    private CellStub _quotaManager;
 
 
     private final static Logger _log = LoggerFactory.getLogger(PoolManagerV5.class);
@@ -126,10 +125,15 @@ public class PoolManagerV5
         _broadcast = stub;
     }
 
-    public void setQuotaManager(String quotaManager)
+    public void setQuotaManager(CellStub stub)
     {
-        _quotaManager = quotaManager;
-        _quotasEnabled = !_quotaManager.equals("none");
+        if (stub == null) {
+            _quotasEnabled = false;
+            _quotaManager = null;
+        } else {
+            _quotasEnabled = true;
+            _quotaManager = stub;
+        }
     }
 
     public void setPnfsHandler(PnfsHandler pnfsHandler)
@@ -416,7 +420,7 @@ public class PoolManagerV5
           msg.setPoolMode( poolMode ) ;
           msg.setDetail( statusCode , statusMessage ) ;
           _log.trace("sendPoolStatusRelay: {}", msg);
-          _broadcast.send(msg);
+          _broadcast.notify(msg);
        }catch(Exception ee ){
           _log.warn("Failed to send poolStatus changed message: {}", ee.toString());
        }
@@ -631,32 +635,15 @@ public class PoolManagerV5
     */
 
     private boolean quotasExceeded(FileAttributes fileAttributes) {
-       StorageInfo info = fileAttributes.getStorageInfo();
-       String storageClass = info.getStorageClass()+"@"+info.getHsm() ;
-
-       QuotaMgrCheckQuotaMessage quotas = new QuotaMgrCheckQuotaMessage( storageClass ) ;
-       CellMessage msg = new CellMessage( new CellPath(_quotaManager) , quotas ) ;
-       try{
-           msg = sendAndWait( msg , 20000L ) ;
-           if( msg == null ){
-              _log.warn("quotasExceeded of "+storageClass+" : request timed out");
-              return false ;
-           }
-           Object obj = msg.getMessageObject() ;
-           if( ! (obj instanceof QuotaMgrCheckQuotaMessage ) ){
-              _log.warn("quotasExceeded of "+storageClass+" : unexpected object arrived : "+obj.getClass().getName());
-              return false ;
-           }
-
-           return ((QuotaMgrCheckQuotaMessage)obj).isHardQuotaExceeded() ;
-
-       }catch(Exception ee ){
-
-           _log.warn( "quotasExceeded of "+storageClass+" : Exception : "+ee);
-           _log.warn(ee.toString());
-           return false ;
-       }
-
+        StorageInfo info = fileAttributes.getStorageInfo();
+        String storageClass = info.getStorageClass() + "@" + info.getHsm() ;
+        try {
+            QuotaMgrCheckQuotaMessage quotas = new QuotaMgrCheckQuotaMessage(storageClass);
+           return _quotaManager.sendAndWait(quotas).isHardQuotaExceeded();
+        } catch (Exception e) {
+            _log.warn("quotasExceeded of " + storageClass + " : Exception : {}", e.toString());
+            return false;
+        }
     }
 
     public PoolManagerGetPoolMonitor

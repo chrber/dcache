@@ -7,6 +7,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import diskCacheV111.vehicles.Message;
 
@@ -17,10 +18,8 @@ import dmg.cells.nucleus.CellMessageAnswerable;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.SerializationException;
-import dmg.util.Args;
 
-import org.dcache.services.info.base.StateUpdate;
-import org.dcache.services.info.base.StateUpdateManager;
+import org.dcache.util.Args;
 
 import static org.junit.Assert.*;
 
@@ -80,32 +79,25 @@ public class MessageHandlerChainAsMessageSenderTests {
         }
 
         @Override
-        public CellMessage sendAndWait( CellMessage envelope, long timeout)
-                throws SerializationException, NoRouteToCellException,
-                InterruptedException {
-            fail( "call to sendAndWait");
-            return null;
-        }
-
-        @Override
-        public CellMessage sendAndWaitToPermanent( CellMessage envelope,
-                                                   long timeout)
-                throws SerializationException, InterruptedException {
-            fail( "call to sendAndWaitToPermanent");
-            return null;
-        }
-
-        @Override
         public void sendMessage( CellMessage envelope)
                 throws SerializationException, NoRouteToCellException {
             _sendMessages.add( envelope);
         }
 
         @Override
-        public void sendMessage( CellMessage envelope,
-                                 CellMessageAnswerable callback, long timeout)
-                throws SerializationException {
+        public void sendMessage(CellMessage envelope, CellMessageAnswerable callback,
+                                Executor executor, long timeout)
+                throws SerializationException
+        {
             _sendMessages.add( envelope);
+        }
+
+        @Override
+        public void sendMessageWithRetryOnNoRouteToCell(CellMessage envelope, CellMessageAnswerable callback,
+                                                        Executor executor, long timeout)
+                throws SerializationException
+        {
+            _sendMessages.add(envelope);
         }
 
         public List<CellMessage> getSentMessages() {

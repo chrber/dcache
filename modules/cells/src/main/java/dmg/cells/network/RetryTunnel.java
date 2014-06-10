@@ -27,11 +27,11 @@ import dmg.cells.nucleus.LastMessageEvent;
 import dmg.cells.nucleus.MessageEvent;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.RoutedMessageEvent;
-import dmg.util.Args;
 import dmg.util.Gate;
 import dmg.util.StateEngine;
 import dmg.util.StateThread;
 
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 
 /**
@@ -162,8 +162,8 @@ public class RetryTunnel implements Cell,
               CellMessage msg = (CellMessage) obj ;
               _log.info( "receiverThread : Message from tunnel : "+msg ) ;
               try{
-                 _nucleus.sendMessage( msg ) ;
-                 _messagesToSystem ++ ;
+                  _nucleus.sendMessage(msg, true, true);
+                  _messagesToSystem ++ ;
               }catch( NoRouteToCellException nrtce ){
                  _log.info( "receiverThread : Exception in sendMessage : "+nrtce ) ;
               }

@@ -19,6 +19,7 @@ package org.dcache.tests.cells;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import dmg.cells.nucleus.CellEndpoint;
 import dmg.cells.nucleus.CellInfo;
@@ -26,8 +27,8 @@ import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellMessageAnswerable;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.SerializationException;
-import dmg.util.Args;
 
+import org.dcache.util.Args;
 import static com.google.common.base.Preconditions.checkState;
 
 /**
@@ -67,7 +68,7 @@ public class CellEndpointHelper implements CellEndpoint
     }
 
     @Override
-    public void sendMessage(CellMessage envelope, CellMessageAnswerable callback, long timeout)
+    public void sendMessage(CellMessage envelope, CellMessageAnswerable callback, Executor executor, long timeout)
             throws SerializationException
     {
         CellMessage answer = currentTest().messageArrived(envelope);
@@ -80,17 +81,11 @@ public class CellEndpointHelper implements CellEndpoint
     }
 
     @Override
-    public CellMessage sendAndWait(CellMessage envelope, long timeout)
-            throws SerializationException, NoRouteToCellException, InterruptedException
+    public void sendMessageWithRetryOnNoRouteToCell(CellMessage envelope, CellMessageAnswerable callback,
+                                                    Executor executor, long timeout)
+            throws SerializationException
     {
-        return currentTest().messageArrived(envelope);
-    }
-
-    @Override
-    public CellMessage sendAndWaitToPermanent(CellMessage envelope, long timeout)
-            throws SerializationException, InterruptedException
-    {
-        return currentTest().messageArrived(envelope);
+        sendMessage(envelope, callback, executor, timeout);
     }
 
     @Override

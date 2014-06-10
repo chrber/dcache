@@ -15,7 +15,8 @@ import dmg.cells.nucleus.CellAdapter;
 import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.CellTunnelInfo;
-import dmg.util.Args;
+
+import org.dcache.util.Args;
 
 /**
   *
@@ -172,7 +173,7 @@ public class TopoCell extends CellAdapter implements Runnable  {
                                 new CellPath(cellPath) ,
                                 "getcelltunnelinfos"      ) ;
 
-      msg = sendAndWait( msg , _waitTime ) ;
+       msg = getNucleus().sendAndWait(msg, _waitTime);
       if( msg == null ){
          setStatus( "Timeout from : "+cellPath ) ;
          return null ;

@@ -17,6 +17,7 @@
  */
 package org.dcache.xrootd.door;
 
+import com.google.common.collect.Iterables;
 import com.google.common.net.InetAddresses;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelEvent;
@@ -95,6 +96,7 @@ public class XrootdRedirectHandler extends AbstractXrootdRequestHandler
         LoggerFactory.getLogger(XrootdRedirectHandler.class);
 
     private final XrootdDoor _door;
+    private final FsPath _uploadPath;
 
     private boolean _isReadOnly = true;
     private FsPath _userRootPath = new FsPath();
@@ -108,10 +110,11 @@ public class XrootdRedirectHandler extends AbstractXrootdRequestHandler
     private final Set<Thread> _threads =
         Collections.synchronizedSet(new HashSet<Thread>());
 
-    public XrootdRedirectHandler(XrootdDoor door, FsPath rootPath)
+    public XrootdRedirectHandler(XrootdDoor door, FsPath rootPath, FsPath uploadPath)
     {
         _door = door;
         _rootPath = rootPath;
+        _uploadPath = uploadPath;
     }
 
     @Override
@@ -394,7 +397,7 @@ public class XrootdRedirectHandler extends AbstractXrootdRequestHandler
         } catch (CacheException e) {
             throw new XrootdException(kXR_ServerError,
                                       String.format("Failed to create directory " +
-                                                    "(%s [%d]).",
+                                                            "(%s [%d]).",
                                                     e.getMessage(), e.getRc()));
         }
     }
@@ -733,7 +736,7 @@ public class XrootdRedirectHandler extends AbstractXrootdRequestHandler
          * Respond to client in the case of a timeout.
          */
         @Override
-        public void timeout(CellPath path) {
+        public void timeout(String error) {
             respond(_context, _event,
                     withError(_request,
                               kXR_ServerError,
@@ -769,7 +772,8 @@ public class XrootdRedirectHandler extends AbstractXrootdRequestHandler
             throws PermissionDeniedCacheException
     {
         FsPath fullPath = new FsPath(_rootPath, new FsPath(path));
-        if (!fullPath.startsWith(_userRootPath)) {
+        if (!fullPath.startsWith(_userRootPath) &&
+                (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
             throw new PermissionDeniedCacheException("Permission denied");
         }
         return fullPath;

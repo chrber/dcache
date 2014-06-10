@@ -9,7 +9,8 @@ import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellNucleus;
 import dmg.cells.nucleus.CellPath;
 import dmg.protocols.telnet.TelnetServerAuthentication;
-import dmg.util.Args;
+
+import org.dcache.util.Args;
 
 /**
  **
@@ -80,10 +81,6 @@ public class      TelnetSAuth_A
        }
 
        Object answer = answerMsg.getMessageObject() ;
-
-       if( answer instanceof Exception ) {
-           throw (Exception) answer;
-       }
 
        if( ( ! ( answer instanceof Object [] )  ) ||
            (   ((Object[])answer).length < 6    ) ||

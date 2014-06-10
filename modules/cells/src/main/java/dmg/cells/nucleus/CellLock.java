@@ -1,46 +1,36 @@
 package dmg.cells.nucleus;
 
+import java.util.concurrent.Executor;
 
-public class CellLock {
-    Object _object;
-    CellMessageAnswerable _callback;
-    long _timeout;
-    boolean _sync = true;
-    CellMessage _message;
+import static com.google.common.base.Preconditions.checkNotNull;
+
+public class CellLock
+{
+    private final CellMessageAnswerable _callback;
+    private final long _timeout;
+    private final CellMessage _message;
     private final CDC _cdc = new CDC();
+    private final Executor _executor;
 
     public CellLock(CellMessage msg, CellMessageAnswerable callback,
-            long timeout) {
-        if (callback == null) {
-            throw new IllegalArgumentException("Null callback not permitted");
-        }
-        _callback = callback;
+                    Executor executor, long timeout)
+    {
+        _callback = checkNotNull(callback);
+        _executor = checkNotNull(executor);
         _timeout = System.currentTimeMillis() + timeout;
-        _sync = false;
         _message = msg;
-    }
-
-    public CellLock() {
-    }
-
-    public void setObject(Object o) {
-        _object = o;
-    }
-
-    public Object getObject() {
-        return _object;
     }
 
     public CellMessageAnswerable getCallback() {
         return _callback;
     }
 
-    public boolean isSync() {
-        return _sync;
-    }
-
     public CellMessage getMessage() {
         return _message;
+    }
+
+    public Executor getExecutor() {
+        return _executor;
     }
 
     public long getTimeout() {

@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans"
        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
        xsi:schemaLocation="http://www.springframework.org/schema/beans
-           http://www.springframework.org/schema/beans/spring-beans.xsd">
+           http://www.springframework.org/schema/beans/spring-beans.xsd http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd">
 
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
+    <context:property-placeholder/>
 
     <bean id="permission-handler"
           class="org.dcache.namespace.ChainedPermissionHandler">
@@ -38,26 +36,34 @@
       <property name="queueMaxSize" value="${pnfsmanager.limits.queue-length}"/>
   </bean>
 
-  <bean id="chimera-data-source" class="com.jolbox.bonecp.BoneCPDataSource"
-        destroy-method="close">
-      <property name="driverClass" value="${pnfsmanager.db.driver}"/>
-      <property name="jdbcUrl" value="${pnfsmanager.db.url}"/>
-      <property name="username" value="${pnfsmanager.db.user}"/>
-      <property name="password" value="${pnfsmanager.db.password}"/>
-      <property name="partitionCount" value="${pnfsmanager.db.connections.partition-count}"/>
-      <property name="maxConnectionsPerPartition" value="${pnfsmanager.db.connections.max-per-partition}"/>
-      <property name="minConnectionsPerPartition" value="${pnfsmanager.db.connections.min-per-partition}"/>
-      <property name="idleConnectionTestPeriodInMinutes" value="60"/>
-      <property name="idleMaxAgeInMinutes" value="240"/>
-      <property name="acquireIncrement" value="5"/>
-      <property name="statementsCacheSize" value="100"/>
-  </bean>
+   <bean id="chimera-data-source" class="com.zaxxer.hikari.HikariDataSource"
+          destroy-method="shutdown">
+        <description>Database connection pool</description>
+        <constructor-arg>
+            <bean class="com.zaxxer.hikari.HikariConfig">
+                <constructor-arg type="java.util.Properties">
+                    <value>
+                        minimumIdle = ${pnfsmanager.db.connections.idle}
+                        maximumPoolSize = ${pnfsmanager.db.connections.max}
+                        autoCommit = true
+                        transactionIsolation = TRANSACTION_READ_COMMITTED
+                    </value>
+                </constructor-arg>
+                <property name="dataSource">
+                    <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+                        <property name="url" value="${pnfsmanager.db.url}"/>
+                        <property name="username" value="${pnfsmanager.db.user}"/>
+                        <property name="password" value="#{ T(diskCacheV111.util.Pgpass).getPassword('${pnfsmanager.db.password.file}', '${pnfsmanager.db.url}', '${pnfsmanager.db.user}', '${pnfsmanager.db.password}') }"/>
+                    </bean>
+                </property>
+            </bean>
+        </constructor-arg>
+    </bean>
 
   <bean id="liquibase" class="org.dcache.util.SpringLiquibase">
       <description>Database schema manager</description>
       <property name="dataSource">
           <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
-              <property name="driverClassName" value="${pnfsmanager.db.driver}"/>
               <property name="url" value="${pnfsmanager.db.url}"/>
               <property name="username" value="${pnfsmanager.db.user}"/>
               <property name="password" value="${pnfsmanager.db.password}"/>
@@ -88,6 +94,7 @@
       <property name="extractor" ref="extractor"/>
       <property name="aclEnabled" value="${pnfsmanager.enable.acl}"/>
       <property name="atimeGap" value="${pnfsmanager.atime-gap}" />
+      <property name="uploadDirectory" value="${pnfsmanager.upload-directory}"/>
   </bean>
 
   <bean id="acl-admin" class="org.dcache.acl.AclAdmin">

@@ -13,11 +13,12 @@ import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 
 import dmg.cells.network.PingMessage;
 import dmg.cells.services.RoutingManager;
-import dmg.util.Args;
 import dmg.util.Authorizable;
 import dmg.util.AuthorizedArgs;
 import dmg.util.AuthorizedString;
@@ -26,13 +27,17 @@ import dmg.util.CommandException;
 import dmg.util.CommandExitException;
 import dmg.util.CommandInterpreter;
 import dmg.util.CommandPanicException;
-import dmg.util.CommandRequestable;
 import dmg.util.CommandSyntaxException;
 import dmg.util.CommandThrowableException;
 import dmg.util.Gate;
 import dmg.util.Pinboard;
-import org.dcache.util.Version;
+import dmg.util.command.Argument;
+import dmg.util.command.Command;
+import dmg.util.command.Option;
 import dmg.util.logback.FilterShell;
+
+import org.dcache.util.Args;
+import org.dcache.util.Version;
 
 /**
  *
@@ -60,17 +65,11 @@ import dmg.util.logback.FilterShell;
  * @version 0.2.11, 10/22/1998
  */
 
-public class   CellAdapter
-    extends CommandInterpreter
+public class   CellAdapter extends CommandInterpreter
     implements Cell, CellEventListener, CellEndpoint
 {
     private final static Logger _log =
         LoggerFactory.getLogger(CellAdapter.class);
-
-    /**
-     * Retry period for cell communication failures.
-     */
-    private final static long RETRY_PERIOD = 30000; // 30 seconds
 
     private final CellVersion _version = new CellVersion(Version.of(this));
 
@@ -125,7 +124,6 @@ public class   CellAdapter
                        String  cellType,
                        Args    args,
                        boolean startNow) {
-
         _args      = args;
         _nucleus   = new CellNucleus(this, cellName, cellType);
         _autoSetup = cellName + "Setup";
@@ -145,30 +143,12 @@ public class   CellAdapter
             export();
         }
 
-        String async = _args.getOpt("callback");
-        if (async == null) {
-            async = (String) _nucleus.getDomainContext("callback");
-        }
-        if (async != null) {
-            switch (async) {
-            case "async":
-                setAsyncCallback(true);
-                _log.info("Callback set to async");
-                break;
-            case "sync":
-                setAsyncCallback(false);
-                _log.info("Callback set to sync");
-                break;
-            default:
-                _log.warn("Illegal value for 'callback' option : " + async);
-                break;
-            }
-        }
         if (_args.hasOption("replyObject") && _args.getOpt("replyObject").equals("false")) {
             setCommandExceptionEnabled(false);
         }
 
         addCommandListener(new FilterShell(_nucleus.getLoggingThresholds()));
+        addCommandListener(new HelpCommands());
 
         if (startNow) {
             start();
@@ -188,6 +168,23 @@ public class   CellAdapter
         executeSetupContext();
         _startGate.open();
     }
+
+    @Override
+    public Serializable command(Args args) throws CommandException {
+        if (args.argc() == 0) {
+            return "";
+        }
+
+        //
+        // check for the NOOP command.
+        //
+        if (args.argc() > 0 && args.argv(0).equals("xyzzy")) {
+            return "Nothing happens.";
+        }
+
+        return super.command(args);
+    }
+
     /**
      *  Executes the ContextVariable :
      *  &lt;cellName&gt;Setup and "!&lt;setupContextName&gt;"
@@ -220,27 +217,6 @@ public class   CellAdapter
                 _log.warn(e.getMessage());
             }
         }
-    }
-
-    public void setAsyncCallback(boolean async) {
-        _nucleus.setAsyncCallback(async);
-    }
-
-    public final static String hh_exec_context = "<var> [<arg> ...]";
-    public final static String fh_exec_context =
-        "Executes the batch script in the context variable.";
-    public String ac_exec_context_$_1_99(Args args)
-        throws IOException, CommandExitException
-    {
-        StringWriter out = new StringWriter();
-        String var = args.argv(0);
-        try (Reader in = _nucleus.getDomainContextReader(var)) {
-            args.shift();
-            CellShell shell = new CellShell(this);
-            shell.execute("context:" + var, in, out, out, args);
-        }
-
-        return out.toString();
     }
 
     /**
@@ -440,177 +416,33 @@ public class   CellAdapter
      */
     @Override
     public void sendMessage(CellMessage msg)
-        throws SerializationException,
-               NoRouteToCellException    {
-        _nucleus.sendMessage(msg);
+        throws SerializationException, NoRouteToCellException
+    {
+        getNucleus().sendMessage(msg, true, true);
     }
-    /**
-     *  sends a <code>CellMessage</code> along the specified path.
-     *  Two additional boolean arguments allow to specify whether
-     *  the message should only be delivered locally, remotely or
-     *  both. The callback arguments (which has to be non-null
-     *  allows to specify a Class which is informed as soon as
-     *  an answer arrived or if the timeout has expired.
-     *
-     * @param msg the message to be sent.
-     * @param locally if set to 'false' the message is not delivered
-     *                locally.
-     * @param remotely if set to 'false' the message is not delivered
-     *                 remotely.
-     * @param callback specifies a class which will be informed as
-     *                 soon as the message arrives.
-     * @param timeout  is the timeout interval in msec.
-     *
-     * @exception SerializationException if the payload object of this
-     *            message is not Serializable.
-     *
-     */
-    public void sendMessage(CellMessage msg,
-                            boolean locally,
-                            boolean remotely,
-                            CellMessageAnswerable callback,
-                            long    timeout)
-        throws SerializationException {
-        _nucleus.sendMessage(msg, locally, remotely, callback, timeout);
+
+    @Override
+    public void sendMessageWithRetryOnNoRouteToCell(CellMessage msg,
+                                                    CellMessageAnswerable callback,
+                                                    Executor executor,
+                                                    long timeout)
+        throws SerializationException
+    {
+        CellMessageAnswerable retryingCallback =
+                new RetryingCellMessageAnswerable(msg, callback, executor, timeout);
+        sendMessage(msg, retryingCallback, executor, timeout);
     }
+
     @Override
     public void sendMessage(CellMessage msg,
                             CellMessageAnswerable callback,
-                            long    timeout)
-        throws SerializationException {
-        _nucleus.sendMessage(msg, true, true, callback, timeout);
-    }
-    /**
-     *  sends a <code>CellMessage</code> along the specified path.
-     *  Two additional boolean arguments allow to specify whether
-     *  the message should only be delivered locally, remotely or
-     *  both.
-     *
-     * @param msg the message to be sent.
-     * @param locally if set to 'false' the message is not delivered
-     *                locally.
-     * @param remotely if set to 'false' the message is not delivered
-     *                 remotely.
-     * @exception SerializationException if the payload object of this
-     *            message is not Serializable.
-     * @exception NoRouteToCellException if the destination <code>CellPath</code>
-     *            couldn't be reached.
-     *
-     */
-    public void sendMessage(CellMessage msg, boolean locally,
-                            boolean remotely)
-        throws SerializationException,
-               NoRouteToCellException    {
-        _nucleus.sendMessage(msg, locally, remotely);
-    }
-    /**
-     *  sends a <code>CellMessage</code> along the specified path,
-     *  and waits <code>millisecs</code> for an answer to arrive.
-     *  The answer will bypass the ordinary queuing mechanism and
-     *  will be delivered before any other asynchronous message.
-     *  The answer need to have the getLastUOID set to the
-     *  UOID of the message send with sendAndWait. If the answer
-     *  doesn't arrive withing the specified time intervall,
-     *  the method returns 'null' and the answer will be handled
-     *  as if it was an ordinary asynchronous message.
-     *
-     * @param msg the message to be sent.
-     * @param local if 'false' the destination is not looked up locally.
-     * @param remote if 'false' the destination is not looked up remotely.
-     * @param millisecs milliseconds to wait for an answer.
-     * @return the answer CellMessage or 'null' if intervall timed out.
-     * @exception SerializationException if the payload object of this
-     *            message is not Serializable.
-     * @exception NoRouteToCellException if the destination <code>CellPath</code>
-     *            couldn't be reached.
-     *
-     */
-    public CellMessage sendAndWait(CellMessage msg,
-                                   boolean local,
-                                   boolean remote,
-                                   long millisecs)
-        throws SerializationException,
-               NoRouteToCellException,
-               InterruptedException        {
-        return _nucleus.sendAndWait(msg, local, remote, millisecs);
-    }
-    /**
-     *
-     * convenience method : identical to <br>
-     *  sendAndWait(msg, millisecs, true, true);
-     *
-     * @param msg the message to be sent.
-     * @param millisecs milliseconds to wait.
-     * @return the answer CellMessage or 'null' if intervall timed out.
-     * @exception SerializationException if the payload object of this
-     *            message is not Serializable.
-     * @exception NoRouteToCellException if the destination <code>CellPath</code>
-     *            couldn't be reached.
-     *
-     * @see CellNucleus#sendAndWait(CellMessage,long,boolean,boolean)
-     */
-    @Override
-    public CellMessage sendAndWait(CellMessage msg,
-                                   long millisecs)
-        throws SerializationException,
-               NoRouteToCellException,
-               InterruptedException        {
-        return _nucleus.sendAndWait(msg, true, true, millisecs);
-    }
-
-    private long timeUntil(long time)
+                            Executor executor,
+                            long timeout)
+        throws SerializationException
     {
-        return time - System.currentTimeMillis();
+        getNucleus().sendMessage(msg, true, true, callback, executor, timeout);
     }
 
-    /**
-     * @see CellEndpoint.sendAndWaitToPermanent
-     */
-    @Override
-    public CellMessage sendAndWaitToPermanent(CellMessage envelope,
-                                              long timeout)
-        throws SerializationException,
-               InterruptedException
-    {
-        long deadline = System.currentTimeMillis() + timeout;
-        try {
-            return sendAndWait(envelope, timeUntil(deadline));
-        } catch (NoRouteToCellException e) {
-            _log.warn("{}", e.toString());
-
-            while (timeUntil(deadline) > RETRY_PERIOD) {
-                if (_shutdownGate.await(RETRY_PERIOD)) {
-                    break;
-                }
-                try {
-                    return sendAndWait(envelope, timeUntil(deadline));
-                } catch (NoRouteToCellException ignored) {
-                }
-            }
-            return null;
-        }
-    }
-
-
-
-    /**
-     *  sends a <code>CellMessage</code> along the specified path.
-     *  <strong>resendMessage does not resolve the local cell
-     *  Namespace, only the routes are inspected.</strong>
-     *
-     *
-     * @param msg the message to be sent.
-     * @exception SerializationException if the payload object of this
-     *            message is not Serializable.
-     * @exception NoRouteToCellException if the destination <code>CellPath</code>
-     *            couldn't be reached.
-     *
-     */
-    public void resendMessage(CellMessage msg)
-        throws SerializationException,
-               NoRouteToCellException    {
-        _nucleus.resendMessage(msg);
-    }
     /**
      *  Returns the message object which caused a
      *  Command Interpreter client method to trigger.
@@ -635,8 +467,8 @@ public class   CellAdapter
      * should be overwrite to provide more specific
      * information about this cell.
      *
-     * @param printWrite the printWrite which has to be used to
-     *                   write the information to.
+     * @param printWriter the printWriter which has to be used to
+     *                    write the information to.
      *
      */
     public void getInfo(PrintWriter printWriter) {
@@ -669,13 +501,11 @@ public class   CellAdapter
      * Other messages are delivered throu <code>messageToForward</code>.
      *
      * @param msg the reference to message arrived.
-     * @see CellAdapter#commandArrived(CellMessage)
-     *
      */
     public void messageArrived(CellMessage msg) {
-        _log.info(" CellMessage From   : "+msg.getSourcePath());
-        _log.info(" CellMessage To     : "+msg.getDestinationPath());
-        _log.info(" CellMessage Object : "+msg.getMessageObject());
+        _log.info(" CellMessage From   : " + msg.getSourcePath());
+        _log.info(" CellMessage To     : " + msg.getDestinationPath());
+        _log.info(" CellMessage Object : " + msg.getMessageObject());
 
     }
     /**
@@ -689,7 +519,7 @@ public class   CellAdapter
     public void messageToForward(CellMessage msg) {
         msg.nextDestination();
         try {
-            _nucleus.sendMessage(msg);
+            _nucleus.sendMessage(msg, true, true);
         } catch (NoRouteToCellException nrtc) {
             _log.warn("CellAdapter : NoRouteToCell in messageToForward : "+nrtc);
         } catch (Exception eee) {
@@ -768,93 +598,110 @@ public class   CellAdapter
      */
     @Override
     public void routeDeleted(CellEvent ce) {}
-    //
-    // methods which are automatically scanned by
-    // the CommandInterpreterFacility
-    //
-    public String ac_say_$_1(Args args) {
-        _log.info(args.argv(0));
-        return "";
-    }
-    public Object ac_xgetcellinfo(Args args) {
-        return getCellInfo();
-    }
-    public static final String hh_info = "[-l|-a]";
-    public String ac_info(Args args)
+
+    @Command(name = "xgetcellinfo")
+    public class GetCellInfoCommand implements Callable<CellInfo>
     {
-        boolean full = args.hasOption("a");
-        boolean lng  = full || args.hasOption("l");
-        if (lng) {
-            StringBuilder sb = new StringBuilder();
-            sb.append(getInfo()).append("\n");
-            Map<UOID,CellLock > map = _nucleus.getWaitQueue();
-            if (! map.isEmpty()) {
-                sb.append("\nWe are waiting for the following messages\n");
-            }
-            for (Map.Entry<UOID,CellLock > entry : map.entrySet()) {
-                Object    key   = entry.getKey();
-                CellLock  lock  = entry.getValue();
-                sb.append(key.toString()).append(" r=");
-                long res = lock.getTimeout() - System.currentTimeMillis();
-                sb.append(res/1000).append(" sec;");
-                CellMessage msg = lock.getMessage();
-                if (msg == null) {
-                    sb.append("msg=none");
-                } else {
-                    Object obj = msg.getMessageObject();
-                    if (obj != null) {
-                        sb.append("msg=").append(obj.getClass().getName());
-                        if (full) {
-                            sb.append("/").append(obj.toString());
+        @Override
+        public CellInfo call()
+        {
+            return getCellInfo();
+        }
+    }
+
+    @Command(name = "info")
+    public class InfoCommand implements Callable<String>
+    {
+        @Option(name = "a", usage = "Display content of unanswered message requests.")
+        boolean full;
+
+        @Option(name = "l", usage = "Display unanswered message requests.")
+        boolean lng;
+
+        @Override
+        public String call()
+        {
+            if (lng || full) {
+                StringBuilder sb = new StringBuilder();
+                sb.append(getInfo()).append("\n");
+                Map<UOID,CellLock > map = _nucleus.getWaitQueue();
+                if (! map.isEmpty()) {
+                    sb.append("\nWe are waiting for the following messages\n");
+                }
+                for (Map.Entry<UOID,CellLock > entry : map.entrySet()) {
+                    Object    key   = entry.getKey();
+                    CellLock  lock  = entry.getValue();
+                    sb.append(key.toString()).append(" r=");
+                    long res = lock.getTimeout() - System.currentTimeMillis();
+                    sb.append(res/1000).append(" sec;");
+                    CellMessage msg = lock.getMessage();
+                    if (msg == null) {
+                        sb.append("msg=none");
+                    } else {
+                        Object obj = msg.getMessageObject();
+                        if (obj != null) {
+                            sb.append("msg=").append(obj.getClass().getName());
+                            if (full) {
+                                sb.append("/").append(obj.toString());
+                            }
                         }
                     }
+                    sb.append("\n");
                 }
-                sb.append("\n");
+                return sb.toString();
+            } else {
+                return getInfo();
             }
+        }
+    }
+
+    @Command(name = "show pinboard",
+             hint = "display the most recent pinboard messages",
+             description = "The pinboard always stores the most recent log messages.  It has " +
+                     "a fixed capacity: once full appending a new message will eject the oldest " +
+                     "stored message.  See also the 'log set' command.")
+    public class ShowPinboardCommand implements Callable<String>
+    {
+        @Argument(required = false, metaVar = "lines",
+                  usage = "How many pinboard entries to display.")
+        int lines = 20;
+
+        @Override
+        public String call()
+        {
+            Pinboard pinboard = _nucleus.getPinboard();
+            if (pinboard == null) {
+                return "No pinboard defined";
+            }
+            StringBuilder sb = new StringBuilder();
+            pinboard.dump(sb, lines);
             return sb.toString();
-        } else {
-            return getInfo();
         }
     }
-    public static final String hh_show_pinboard =
-        "[<lines>] # dumps the last <lines> to the terminal";
-    public String ac_show_pinboard_$_0_1(Args args)
+
+    @Command(name = "dump pinboard", hint = "write pinboard to file",
+             description = "Writes the pinboard log to FILE on the local file system of the service.")
+    public class DumpPinboardCommand implements Callable<String>
     {
-        Pinboard pinboard = _nucleus.getPinboard();
-        if (pinboard == null) {
-            return "No Pinboard defined";
-        }
-        StringBuffer sb = new StringBuffer();
-        if (args.argc() > 0) {
-            pinboard.dump(sb, Integer.parseInt(args.argv(0)));
-        } else {
-            pinboard.dump(sb, 20);
-        }
+        @Argument(metaVar = "file")
+        File file;
 
-        return sb.toString();
-    }
-
-    public static final String hh_dump_pinboard =
-        "<filename> # dumps the full pinboard to <filename>";
-    public String ac_dump_pinboard_$_1(Args args)
-    {
-        Pinboard pinboard = _nucleus.getPinboard();
-        if (pinboard == null) {
-            return "No Pinboard defined";
+        @Override
+        public String call() throws IOException
+        {
+            Pinboard pinboard = _nucleus.getPinboard();
+            if (pinboard == null) {
+                return "No pinboard defined.";
+            }
+            pinboard.dump(file);
+            return "Pinboard dumped to " + file;
         }
-
-        try {
-            pinboard.dump(new File(args.argv(0)));
-        } catch (IOException e) {
-            return "Dump Failed : "+e;
-        }
-        return "Pinboard dumped to "+args.argv(0);
     }
 
     /**
      *   belongs to the Cell Interface.
      *   If this method is overwritten, the 'cleanUp'
-     *   method won't becalled.
+     *   method won't be called.
      */
     @Override
     public void prepareRemoval(KillEvent ce)
@@ -939,10 +786,15 @@ public class   CellAdapter
             Serializable obj = msg.getMessageObject();
 
             if (msg.isFinalDestination()) {
+                if (!msg.isReply() && msg.getLocalAge() > msg.getAdjustedTtl()) {
+                    _log.warn("Discarding " + obj.getClass().getSimpleName() +
+                                      " because its time to live has been exceeded.");
+                    return;
+                }
+
                 if (_useInterpreter && (! msg.isReply()) &&
                     ((obj instanceof String) ||
-                     (obj instanceof AuthorizedString) ||
-                     (obj instanceof CommandRequestable))) {
+                     (obj instanceof AuthorizedString))) {
 
                     Serializable o;
                     UOID uoid = msg.getUOID();
@@ -969,7 +821,7 @@ public class   CellAdapter
                             reply.deliver(this, msg);
                         } else {
                             msg.setMessageObject(o);
-                            _nucleus.sendMessage(msg);
+                            _nucleus.sendMessage(msg, true, true);
                         }
                     } catch (NoRouteToCellException e) {
                         _log.warn("PANIC : Problem returning answer : " + e);
@@ -983,7 +835,7 @@ public class   CellAdapter
                     ping.setWayBack();
                     msg.revertDirection();
                     try {
-                        _nucleus.sendMessage(msg);
+                        _nucleus.sendMessage(msg, true, true);
                     } catch (NoRouteToCellException ee) {
                         _log.warn("Couldn't revert PingMessage : "+ee);
                     }
@@ -999,7 +851,7 @@ public class   CellAdapter
             } else if (obj instanceof PingMessage) {
                 msg.nextDestination();
                 try {
-                    _nucleus.sendMessage(msg);
+                    _nucleus.sendMessage(msg, true, true);
                 } catch (NoRouteToCellException ee) {
                     _log.warn("Couldn't forward PingMessage : " + ee);
                 }
@@ -1022,7 +874,8 @@ public class   CellAdapter
         if (command instanceof Authorizable) {
 
             if (_returnCommandException) {
-                return command(new AuthorizedArgs((Authorizable)command));
+                AuthorizedArgs args = new AuthorizedArgs((Authorizable)command);
+                return command(args);
             } else {
                 return autoCommand(command);
             }
@@ -1030,13 +883,11 @@ public class   CellAdapter
         } else if (command instanceof String) {
 
             if (_returnCommandException) {
-                return command(new Args((String)command));
+                Args args = new Args((String)command);
+                return command(args);
             } else {
                 return autoCommand(command);
             }
-
-        } else if (command instanceof CommandRequestable) {
-            return command((CommandRequestable)command);
         } else {
             throw new
                     CommandPanicException("Illegal CommandClass detected",
@@ -1049,9 +900,11 @@ public class   CellAdapter
 
         try {
             if (command instanceof String) {
+                Args args = new Args((String) command);
                 return command(new Args((String) command));
             } else if (command instanceof AuthorizedString) {
-                return command(new AuthorizedArgs((AuthorizedString) command));
+                AuthorizedArgs args = new AuthorizedArgs((AuthorizedString) command);
+                return command(args);
             } else {
                 return "Panic : internal server error 14345";
             }
@@ -1077,9 +930,20 @@ public class   CellAdapter
             return "??? : "+e.toString();
         }
     }
+
+    @Override
+    protected Serializable doExecute(CommandEntry entry, Args args,
+            String[] acls) throws CommandException
+    {
+        if (args instanceof Authorizable) {
+            checkAclPermission((Authorizable) args, args, acls);
+        }
+
+        return super.doExecute(entry, args, acls);
+    }
+
     private CellPath _aclPath    = new CellPath("acm");
     private long     _aclTimeout = 10000L;
-    @Override
     protected void checkAclPermission(Authorizable auth, Object command, String [] acls) throws CommandException {
 
         String user = auth.getAuthorizedPrincipal();
@@ -1113,18 +977,13 @@ public class   CellAdapter
         CellMessage reply;
 
         try {
-            reply = _nucleus.sendAndWait(
-                                         new CellMessage(_aclPath, request),
-                                         _aclTimeout);
-
+            reply = _nucleus.sendAndWait(new CellMessage(_aclPath, request), _aclTimeout);
             if (reply == null) {
-                throw new
-                        CommandException("Error in acl handling : Acl Request timed out (" + _aclPath + ")");
+                throw new CommandException("Error in acl handling : Acl Request timed out (" + _aclPath + ")");
             }
 
-        } catch (NoRouteToCellException | SerializationException | InterruptedException ee) {
-            throw new
-                CommandException("Error in acl handling : "+ee.getMessage());
+        } catch (NoRouteToCellException | ExecutionException | InterruptedException e) {
+            throw new CommandException("Error in acl handling: " + e.getMessage(), e);
         }
 
         Object r = reply.getMessageObject();
@@ -1132,14 +991,61 @@ public class   CellAdapter
             (! (r instanceof Object [])) ||
             (((Object [])r).length < 6) ||
             (! (((Object [])r)[5] instanceof Boolean))) {
-            throw new
-                    CommandException("Error in acl handling : illegal reply arrived");
+            throw new CommandException("Error in acl handling: illegal reply arrived");
         }
 
         if (! ((Boolean) ((Object[]) r)[5])) {
-            throw new
-                    CommandAclException(user, acl);
+            throw new CommandAclException(user, acl);
+        }
+    }
+
+    private class RetryingCellMessageAnswerable implements CellMessageAnswerable, Runnable
+    {
+        private final long deadline;
+        private final CellMessageAnswerable callback;
+        private final CellMessage msg;
+        private final Executor executor;
+
+        public RetryingCellMessageAnswerable(CellMessage msg, CellMessageAnswerable callback, Executor executor, long timeout)
+        {
+            this.callback = callback;
+            this.msg = msg;
+            this.executor = executor;
+            deadline = System.currentTimeMillis() + timeout;
         }
 
+        @Override
+        public void answerArrived(CellMessage request, CellMessage answer)
+        {
+            callback.answerArrived(request, answer);
+        }
+
+        @Override
+        public void exceptionArrived(final CellMessage request, Exception exception)
+        {
+            if (!(exception instanceof NoRouteToCellException)) {
+                callback.exceptionArrived(request, exception);
+            } else if (deadline > System.currentTimeMillis()) {
+                _nucleus.invokeLater(this);
+            } else {
+                callback.answerTimedOut(request);
+            }
+        }
+
+        @Override
+        public void answerTimedOut(CellMessage request)
+        {
+            callback.answerTimedOut(request);
+        }
+
+        @Override
+        public void run() {
+            long timeout = deadline - System.currentTimeMillis();
+            if (timeout > 0) {
+                sendMessage(msg, this, executor, timeout);
+            } else {
+                callback.answerTimedOut(msg);
+            }
+        }
     }
 }

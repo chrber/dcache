@@ -1,8 +1,10 @@
 package dmg.cells.nucleus;
 
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 
-import dmg.util.Args;
+import org.dcache.util.Args;
 
 /**
  * Interface encapsulating a cell as seen by cell components.
@@ -20,81 +22,75 @@ import dmg.util.Args;
  */
 public interface CellEndpoint
 {
-   /**
-    * Sends <code>envelope</code>.
-    *
-    * @param envelope the cell message to be sent.
-    * @throws SerializationException if the payload object of this
-    *         message is not serializable.
-    * @throws NoRouteToCellException if the destination could not be
-    *         reached.
-    */
+    /**
+     * Sends <code>envelope</code>.
+     *
+     * @param envelope the cell message to be sent.
+     * @throws SerializationException if the payload object of this
+     *         message is not serializable.
+     * @throws NoRouteToCellException if the destination could not be
+     *         reached.
+     */
     void sendMessage(CellMessage envelope)
         throws SerializationException,
                NoRouteToCellException;
 
-   /**
-    * Sends <code>envelope</code>. The <code>callback</code> argument
-    * (which has to be non-null) allows to specify an object which is
-    * informed as soon as an has answer arrived or if the timeout has
-    * expired.
-    *
-    * @param envelope the cell message to be sent.
-    * @param callback specifies an object class which will be informed
-    *                 as soon as the message arrives.
-    * @param timeout  is the timeout in msec.
-    * @exception SerializationException if the payload object of this
-    *            message is not serializable.
-    */
+    /**
+     * Sends <code>envelope</code>.
+     *
+     * The <code>callback</code> argument (which has to be non-null)
+     * specifies an object which is informed as soon as an has answer
+     * arrived or if the timeout has expired.
+     *
+     * The callback is run in the supplied executor. The executor may
+     * execute the callback inline, but such an executor must only be
+     * used if the callback is non-blocking, and the callback should
+     * refrain from CPU heavy operations. Care should be taken that
+     * the executor isn't blocked by tasks waiting for the callback;
+     * such tasks could lead to a deadlock.
+     *
+     * @param envelope the cell message to be sent.
+     * @param callback specifies an object class which will be informed
+     *                 as soon as the message arrives.
+     * @param executor the executor to run the callback in
+     * @param timeout  is the timeout in msec.
+     * @exception SerializationException if the payload object of this
+     *            message is not serializable.
+     */
     void sendMessage(CellMessage envelope,
                      CellMessageAnswerable callback,
+                     Executor executor,
                      long timeout)
         throws SerializationException;
 
-   /**
-    * Sends <code>envelope</code> and waits <code>timeout</code>
-    * milliseconds for an answer to arrive.  The answer will bypass
-    * the ordinary queuing mechanism and will be delivered before any
-    * other asynchronous message.  The answer need to have the
-    * getLastUOID set to the UOID of the message send with
-    * sendAndWait. If the answer does not arrive withing the specified
-    * time interval, the method returns <code>null</code> and the
-    * answer will be handled as if it was an ordinary asynchronous
-    * message.
-    *
-    * @param envelope the cell message to be sent.
-    * @param timeout milliseconds to wait for an answer.
-    * @return the answer or null if the timeout was reached.
-    * @throws SerializationException if the payload object of this
-    *         message is not serializable.
-    * @throws NoRouteToCellException if the destination
-    *         couldnot be reached.
-    */
-    CellMessage sendAndWait(CellMessage envelope, long timeout)
-        throws SerializationException,
-               NoRouteToCellException,
-               InterruptedException;
-
-   /**
-    * Sends <code>envelope</code> and waits for an answer to arrive.
-    *
-    * Similar to the sendAndWait method, but does not throw
-    * NoRouteToCellException. Instead message delivery is retried
-    * until the timeout has been reached. At that point null is
-    * returned like for any other timeout.
-    *
-    * This method is useful when sending messages to cells for which
-    * communication failures are known to be temporary.
-    *
-    * @param envelope the cell message to be sent.
-    * @param timeout milliseconds to wait for an answer.
-    * @return the answer or null if the timeout was reached.
-    * @throws SerializationException if the payload object of this
-    *         message is not serializable.
-    */
-    CellMessage sendAndWaitToPermanent(CellMessage envelope, long timeout)
-        throws SerializationException,
-               InterruptedException;
+    /**
+     * Sends <code>envelope</code>. The <code>callback</code> argument
+     * (which must be non-null) specifies an object which is informed as
+     * soon as an has answer arrived or if the timeout has expired.
+     *
+     * In case of failure to deliver the message, delivery is transparently
+     * retried as long as the timeout has not expired.
+     *
+     * The callback is run in the supplied executor. The executor may
+     * execute the callback inline, but such an executor must only be
+     * used if the callback is non-blocking, and the callback should
+     * refrain from CPU heavy operations. Care should be taken that
+     * the executor isn't blocked by tasks waiting for the callback;
+     * such tasks could lead to a deadlockk.
+     *
+     * @param envelope the cell message to be sent.
+     * @param callback specifies an object class which will be informed
+     *                 as soon as the message arrives.
+     * @param executor the executor to run the callback in
+     * @param timeout  is the timeout in msec.
+     * @exception SerializationException if the payload object of this
+     *            message is not serializable.
+     */
+    void sendMessageWithRetryOnNoRouteToCell(CellMessage envelope,
+                                             CellMessageAnswerable callback,
+                                             Executor executor,
+                                             long timeout)
+            throws SerializationException;
 
     /**
      * Provides information about the host cell.

@@ -25,7 +25,8 @@ import dmg.cells.nucleus.CellNucleus;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.CellRoute;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
+
+import org.dcache.util.Args;
 
 /**
   *
@@ -157,7 +158,9 @@ public class RoutingManager
         try {
             CellPath path = new CellPath(destinationManager);
             String[] arr = all.toArray(new String[all.size()]);
-            _nucleus.resendMessage(new CellMessage(path, arr));
+
+            _nucleus.sendMessage(new CellMessage(path, arr), false, true);
+
         } catch (NoRouteToCellException e) {
             /* This normally happens when there is no default route.
              */

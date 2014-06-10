@@ -12,6 +12,7 @@ import java.nio.channels.SocketChannel;
 import java.nio.channels.UnresolvedAddressException;
 import java.nio.channels.UnsupportedAddressTypeException;
 import java.util.Random;
+import java.util.concurrent.ExecutionException;
 
 import dmg.cells.nucleus.CellAdapter;
 import dmg.cells.nucleus.CellMessage;
@@ -19,9 +20,10 @@ import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.services.login.SshCAuth_Key;
 import dmg.protocols.ssh.SshStreamEngine;
-import dmg.util.Args;
 import dmg.util.DummyStreamEngine;
 import dmg.util.StreamEngine;
+
+import org.dcache.util.Args;
 
 public class LocationManagerConnector
     extends CellAdapter
@@ -64,7 +66,7 @@ public class LocationManagerConnector
         try {
             String      query = "where is " + domain;
             CellPath    path  = new CellPath(_lm);
-            CellMessage reply = sendAndWait(new CellMessage(path, query), 5000);
+            CellMessage reply = getNucleus().sendAndWait(new CellMessage(path, query), 5000);
 
             if (reply == null) {
                 throw new IOException("Timeout querying location manager");
@@ -77,7 +79,9 @@ public class LocationManagerConnector
 
             return obj.toString();
         } catch (NoRouteToCellException e) {
-            throw new IOException("No route to location manager");
+            throw new IOException("No route to location manager", e);
+        } catch (ExecutionException e) {
+            throw new IOException(e.getCause().getMessage(), e);
         }
     }
 

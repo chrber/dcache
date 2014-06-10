@@ -64,15 +64,6 @@ COPYRIGHT STATUS:
   documents or software obtained from this server.
  */
 
-/*
- * ModifiableQueue.java
- *
- * Created on March 23, 2004, 9:47 AM
- *  Ideas based on EDU.oswego.cs.dl.util.concurrent.BoundedLinkedQueue,
- *  an example for the Doug Lee's "Concurrent Programming in Java"
- *
- */
-
 package org.dcache.srm.scheduler;
 
 import java.util.ArrayList;
@@ -82,22 +73,11 @@ import java.util.List;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.request.Job;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
-/**
- *
- * @author  timur
- */
 public class ModifiableQueue  {
-    private final String name;
-    private final String scheduler_name;
     private final Class<? extends Job> type;
     private final List<Long> queue = new LinkedList<>();
-    private int capacity = 1000;
 
-    public ModifiableQueue(String name, String scheduler_name, Class<? extends Job> type) {
-        this.name = name;
-        this.scheduler_name = scheduler_name;
+    public ModifiableQueue(Class<? extends Job> type) {
         this.type = type;
     }
 
@@ -147,96 +127,11 @@ public class ModifiableQueue  {
         }
     }
 
-    public Job poll(long msecs)
-            throws InterruptedException,
-            SRMInvalidRequestException {
-
-        long waitTime = msecs;
-        long start = (msecs <= 0)? 0: System.currentTimeMillis();
-        while (true) {
-            Long id = null;
-            synchronized (queue) {
-                if (!queue.isEmpty()) {
-                    id = queue.remove(0);
-                    queue.notifyAll();
-                }
-                if (id != null) {
-                    return Job.getJob(id, type);
-                }
-                if (waitTime <= 0) {
-                    return null;
-                }
-
-                try {
-                    queue.wait(waitTime);
-                } catch (InterruptedException ie) {
-                    queue.notify();
-                    throw ie;
-                }
-            }
-            waitTime = msecs - (System.currentTimeMillis() - start);
-        }
-    }
-
-
-    public void put(Job job) throws InterruptedException {
-        checkArgument(type.isInstance(job));
+    public void put(Job job) {
         long id = job.getId();
-        while (true) {
-            synchronized (queue) {
-                if (queue.size() < capacity) {
-                    queue.add(id);
-                    queue.notifyAll();
-                    return;
-                }
-                try {
-                    queue.wait();
-                } catch (InterruptedException ie) {
-                    queue.notify();
-                    throw ie;
-                }
-            }
-        }
-    }
-
-    public boolean offer(Job job) {
-        checkArgument(type.isInstance(job));
-        long id = job.getId();
-
         synchronized (queue) {
-            if (queue.size() < capacity) {
-                queue.add(id);
-                queue.notifyAll();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public boolean offer(Job job, long msecs) throws InterruptedException {
-        checkArgument(type.isInstance(job));
-        long waitTime = msecs;
-        long start = (msecs <= 0)? 0: System.currentTimeMillis();
-        long id = job.getId();
-        while (true) {
-            synchronized (queue) {
-                if (queue.size() < capacity) {
-                    queue.add(id);
-                    queue.notifyAll();
-                    //System.out.println("QUEUE.offer() returns true");
-                    return true;
-                }
-                if (waitTime <= 0) {
-                    return false;
-                }
-                try {
-                    queue.wait(waitTime);
-                } catch (InterruptedException ie) {
-                    queue.notify();
-                    throw ie;
-                }
-                waitTime = msecs - (System.currentTimeMillis() - start);
-            }
+            queue.add(id);
+            queue.notifyAll();
         }
     }
 
@@ -247,7 +142,6 @@ public class ModifiableQueue  {
     }
 
     public Job remove(Job job)  {
-        //System.out.println("QUEUE.remove(" +job.getId()+")");
         if(job == null ) {
             return null;
         }
@@ -262,20 +156,6 @@ public class ModifiableQueue  {
                  return job;
             }
             return null;
-        }
-    }
-
-    public int getCapacity()
-    {
-        synchronized (queue) {
-            return capacity;
-        }
-    }
-
-    public void setCapacity(int newCapacity) {
-        synchronized(queue) {
-            capacity = newCapacity;
-            queue.notifyAll();
         }
     }
 
@@ -319,13 +199,6 @@ public class ModifiableQueue  {
         return greatestValueJob;
     }
 
-    public String printQueue() {
-
-        StringBuilder sb = new StringBuilder();
-        printQueue(sb);
-        return sb.toString();
-    }
-
     public void printQueue(StringBuilder sb) {
         synchronized(queue)
         {
@@ -343,4 +216,8 @@ public class ModifiableQueue  {
 
     }
 
+    public Class<? extends Job> getType()
+    {
+        return type;
+    }
 }

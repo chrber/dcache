@@ -11,13 +11,13 @@ import diskCacheV111.namespace.NameSpaceProvider;
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.PnfsId;
 
-import dmg.util.Args;
+import dmg.cells.nucleus.CellCommandListener;
 
 import org.dcache.acl.enums.RsType;
 import org.dcache.acl.parser.ACEParser;
 import org.dcache.auth.Subjects;
-import dmg.cells.nucleus.CellCommandListener;
 import org.dcache.namespace.FileAttribute;
+import org.dcache.util.Args;
 import org.dcache.vehicles.FileAttributes;
 
 /**
@@ -240,7 +240,8 @@ public class AclAdmin
 
         FileAttributes attributes = new FileAttributes();
         attributes.setAcl(new ACL(rsType, aces));
-        _nameSpaceProvider.setFileAttributes(Subjects.ROOT, pnfsId, attributes);
+        _nameSpaceProvider.setFileAttributes(Subjects.ROOT, pnfsId, attributes,
+                EnumSet.noneOf(FileAttribute.class));
         return "Done";
     }
 

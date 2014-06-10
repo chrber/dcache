@@ -10,12 +10,8 @@
            http://www.springframework.org/schema/task
            http://www.springframework.org/schema/task/spring-task.xsd">
 
+  <context:property-placeholder/>
   <context:annotation-config/>
-
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
 
     <!--
         Convert protperies with multiple values separated by comma into an array of strings:
@@ -160,22 +156,33 @@
   </bean>
 
   <bean id="queue" class="org.dcache.pool.classic.StorageClassContainer">
-    <description>HSM flush queue manager</description>
-    <constructor-arg ref="rep"/>
+      <description>HSM flush queue manager</description>
+      <constructor-arg ref="rep"/>
+      <constructor-arg ref="storagehandler"/>
   </bean>
 
-  <bean id="hsmset" class="diskCacheV111.util.HsmSet">
+  <bean id="storagehandler" class="org.dcache.pool.nearline.NearlineStorageHandler">
+      <description>Nearline storage manager</description>
+      <property name="scheduledExecutor" ref="workerThreadPool"/>
+      <property name="executor">
+          <bean class="org.dcache.util.CDCListeningExecutorServiceDecorator"
+                destroy-method="shutdown">
+              <constructor-arg>
+                  <bean class="java.util.concurrent.Executors"
+                        factory-method="newCachedThreadPool"/>
+              </constructor-arg>
+          </bean>
+      </property>
+      <property name="repository" ref="rep"/>
+      <property name="checksumModule" ref="csm"/>
+      <property name="pnfsHandler" ref="pnfs"/>
+      <property name="flushMessageTarget" ref="flush-notification-stub"/>
+      <property name="billingStub" ref="billing-stub"/>
+      <property name="hsmSet" ref="hsmset"/>
+  </bean>
+
+  <bean id="hsmset" class="org.dcache.pool.nearline.HsmSet">
     <description>HSM backend manager</description>
-  </bean>
-
-  <bean id="storagehandler" class="org.dcache.pool.classic.HsmStorageHandler2">
-    <description>HSM integration module</description>
-    <property name="repository" ref="rep"/>
-    <property name="pnfsHandler" ref="pnfs"/>
-    <property name="hsms" ref="hsmset"/>
-    <property name="checksumModule" ref="csm"/>
-    <property name="flushMessageTarget" value="${pool.destination.flush-notification}"/>
-    <property name="billingStub" ref="billing-stub"/>
   </bean>
 
   <bean id="jtm" class="org.dcache.pool.classic.JobTimeoutManager"
@@ -186,7 +193,11 @@
   <bean id="flush" class="org.dcache.pool.classic.HsmFlushController">
     <description>Controller for centralising flushing</description>
     <constructor-arg ref="queue"/>
-    <constructor-arg ref="storagehandler"/>
+  </bean>
+
+  <bean id="flush-notification-stub" class="org.dcache.cells.CellStub">
+      <description>Flush notification stub</description>
+      <property name="destination" value="${pool.destination.flush-notification}"/>
   </bean>
 
   <bean id="billing-stub" class="org.dcache.cells.CellStub">
@@ -246,21 +257,6 @@
     </constructor-arg>
   </bean>
 
-  <bean id="callbackThreadPool"
-        class="java.util.concurrent.ThreadPoolExecutor"
-        destroy-method="shutdown">
-    <description>Thread pool for message callbacks</description>
-    <constructor-arg value="${pool.cell.limits.callback.threads.min}"/>
-    <constructor-arg value="${pool.cell.limits.callback.threads.max}"/>
-    <constructor-arg value="${pool.cell.limits.callback.threads.max-idle-time}"/>
-    <constructor-arg value="${pool.cell.limits.callback.threads.max-idle-time.unit}"/>
-    <constructor-arg>
-      <bean class="java.util.concurrent.ArrayBlockingQueue">
-        <constructor-arg value="${pool.cell.limits.callback.queue.max}"/>
-      </bean>
-    </constructor-arg>
-  </bean>
-
   <bean id="pinManagerStub" class="org.dcache.cells.CellStub">
     <description>Pin manager cell stub</description>
       <property name="destination" value="${pool.service.pinmanager}"/>
@@ -313,7 +309,7 @@
   </bean>
 
   <bean id="io-queue-manager" class="org.dcache.pool.classic.IoQueueManager"
-          destroy-method="shutdown">
+          destroy-method="shutdown" depends-on="transfer-services">
     <description>Requests IO manager</description>
     <constructor-arg ref="jtm" />
     <constructor-arg value="p2p,${pool.queues}" />
@@ -335,7 +331,8 @@
       <property name="faultListener" ref="pool"/>
   </bean>
 
-  <bean id="xrootd-transfer-service" class="org.dcache.xrootd.pool.XrootdTransferService">
+  <bean id="xrootd-transfer-service" class="org.dcache.xrootd.pool.XrootdTransferService"
+          depends-on="rep">
       <description>Xrootd transfer service</description>
       <property name="postTransferService" ref="post-transfer-service"/>
       <property name="faultListener" ref="pool"/>
@@ -353,7 +350,8 @@
       </property>
   </bean>
 
-  <bean id="http-transfer-service" class="org.dcache.http.HttpTransferService">
+  <bean id="http-transfer-service" class="org.dcache.http.HttpTransferService"
+          depends-on="rep">
       <description>HTTP transfer service</description>
       <property name="postTransferService" ref="post-transfer-service"/>
       <property name="checksumModule" ref="csm"/>
@@ -370,7 +368,7 @@
   </bean>
 
   <bean id="post-transfer-service" class="org.dcache.pool.classic.DefaultPostTransferService"
-        init-method="init" destroy-method="shutdown">
+        init-method="init" destroy-method="shutdown" depends-on="rep">
       <description>Post processing execution service</description>
       <property name="billingStub" ref="billing-stub"/>
       <property name="poolName" value="${pool.name}"/>

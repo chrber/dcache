@@ -1,6 +1,7 @@
 package org.dcache.chimera.namespace;
 
-import com.jolbox.bonecp.BoneCPDataSource;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -10,6 +11,7 @@ import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.PrintWriter;
 import java.net.URI;
@@ -31,21 +33,20 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import diskCacheV111.util.CacheException;
 import diskCacheV111.vehicles.PoolManagerPoolUpMessage;
 import diskCacheV111.vehicles.PoolRemoveFilesMessage;
 
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
 
 import org.dcache.cells.AbstractCell;
-import org.dcache.cells.AbstractMessageCallback;
 import org.dcache.cells.CellStub;
-import org.dcache.cells.MessageCallback;
 import org.dcache.cells.Option;
 import org.dcache.services.hsmcleaner.PoolInformationBase;
 import org.dcache.services.hsmcleaner.RequestTracker;
 import org.dcache.services.hsmcleaner.Sink;
+import org.dcache.util.Args;
 import org.dcache.util.BroadcastRegistrationTask;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -179,7 +180,7 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
     private ScheduledExecutorService _executor;
     private ScheduledFuture<?> _cleanerTask;
     private PoolInformationBase _pools = new PoolInformationBase();
-    private BoneCPDataSource _dataSource;
+    private HikariDataSource _dataSource;
     private JdbcTemplate _db;
     private BroadcastRegistrationTask _broadcastRegistration;
     private CellStub _broadcasterStub;
@@ -200,7 +201,7 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
 
         _executor = Executors.newScheduledThreadPool(_threadPoolSize);
 
-        dbInit(getArgs().getOpt("chimera.db.url"), getArgs().getOpt("chimera.db.driver"),
+        dbInit(getArgs().getOpt("chimera.db.url"),
                 getArgs().getOpt("chimera.db.user"), getArgs().getOpt("chimera.db.password"));
 
         if (!_reportTo.isEmpty()) {
@@ -246,10 +247,7 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
         addMessageListener(_pools);
         addCommandListener(_pools);
 
-        _poolStub = new CellStub();
-        _poolStub.setCellEndpoint(this);
-        _poolStub.setTimeout(_replyTimeout);
-        _poolStub.setTimeoutUnit(_replyTimeoutUnit);
+        _poolStub = new CellStub(this, null, _replyTimeout, _replyTimeoutUnit);
 
         _broadcastRegistration = new BroadcastRegistrationTask();
         _broadcastRegistration.setTarget(new CellPath(getCellName(), getCellDomainName()));
@@ -266,30 +264,19 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
                                              _refreshIntervalUnit);
     }
 
-    void dbInit(String jdbcUrl, String jdbcClass, String user, String pass )
+    void dbInit(String jdbcUrl, String user, String pass )
         throws ClassNotFoundException
     {
-        if ((jdbcUrl == null) || (jdbcClass == null) || (user == null)
-            || (pass == null) ) {
+        if (jdbcUrl == null || user == null || pass == null) {
             throw new IllegalArgumentException("Not enough arguments to Init SQL database");
         }
 
-        // Add driver to JDBC
-        Class.forName(jdbcClass);
+        HikariConfig config = new HikariConfig();
+        config.setDataSource(new DriverManagerDataSource(jdbcUrl, user, pass));
+        config.setMinimumIdle(1);
+        config.setMaximumPoolSize(10);
 
-        BoneCPDataSource ds = new BoneCPDataSource();
-        ds.setJdbcUrl(jdbcUrl);
-        ds.setUsername(user);
-        ds.setPassword(pass);
-        ds.setIdleConnectionTestPeriodInMinutes(60);
-        ds.setIdleMaxAgeInMinutes(240);
-        ds.setMaxConnectionsPerPartition(30);
-        ds.setMaxConnectionsPerPartition(10);
-        ds.setPartitionCount(3);
-        ds.setAcquireIncrement(5);
-        ds.setStatementsCacheSize(100);
-
-        _dataSource = ds;
+        _dataSource = new HikariDataSource(config);
         _db = new JdbcTemplate(_dataSource);
 
         _log.info("Database connection with jdbcUrl={}; user={}",
@@ -299,14 +286,17 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
     @Override
     public void cleanUp()
     {
+        if (_requests != null) {
+            _requests.shutdown();
+        }
         if (_executor != null) {
             _executor.shutdownNow();
         }
-        if (_dataSource != null) {
-            _dataSource.close();
-        }
         if (_broadcastRegistration != null) {
             _broadcastRegistration.unregister();
+        }
+        if (_dataSource != null) {
+            _dataSource.shutdown();
         }
     }
 
@@ -466,28 +456,28 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
      * @throws InterruptedException
      */
 
-    private void sendRemoveToPoolCleaner(String poolName,
-            List<String> removeList) throws InterruptedException {
+    private void sendRemoveToPoolCleaner(String poolName, List<String> removeList)
+            throws InterruptedException
+    {
+        _log.debug("sendRemoveToPoolCleaner: poolName={}", poolName);
+        _log.debug("sendRemoveToPoolCleaner: removeList={}", removeList);
 
-        if (_log.isDebugEnabled()) {
-            _log.debug("sendRemoveToPoolCleaner: poolName="+ poolName);
-            _log.debug("sendRemoveToPoolCleaner: removeList="+ removeList);
-        }
-        PoolRemoveFilesMessage msg = new PoolRemoveFilesMessage(poolName, removeList);
-
-        MessageCallback<PoolRemoveFilesMessage> callback =
-                new RemoveMessageCallback(poolName, removeList);
-
-        /*
-         * we may use sendAndWait here. Unfortunately, PoolRemoveFilesMessage
-         * returns an array of not removed files as a error object.
-         * SendAndWait will convert it into exception.
-         *
-         * As a work around that we simulate synchronous behavior.
-         */
-        synchronized(callback) {
-            _poolStub.send(new CellPath(poolName), msg, PoolRemoveFilesMessage.class, callback);
-            callback.wait(_replyTimeoutUnit.toMillis(_replyTimeout));
+        try {
+            PoolRemoveFilesMessage msg =
+                    CellStub.get(_poolStub.send(new CellPath(poolName),
+                                                new PoolRemoveFilesMessage(poolName, removeList)));
+            if (msg.getReturnCode() == 0) {
+                removeFiles(poolName, removeList);
+            } else {
+                Set<String> notRemoved =
+                        new HashSet<>(Arrays.asList((String[]) msg.getErrorObject()));
+                List<String> removed = new ArrayList<>(removeList);
+                removed.removeAll(notRemoved);
+                removeFiles(poolName, removed);
+            }
+        } catch (CacheException e) {
+            _log.warn("Failed to remove files from {}: {}", poolName, e.getMessage());
+            _poolsBlackList.put(poolName, System.currentTimeMillis());
         }
     }
 
@@ -562,7 +552,7 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
              */
             msg.setReplyRequired(false);
 
-            _broadcasterStub.send( msg ) ;
+            _broadcasterStub.notify(msg) ;
             _log.debug("have broadcasted 'remove files' message to " +
                                 _broadcasterStub.getDestinationPath());
         } catch (NoRouteToCellException e) {
@@ -680,14 +670,15 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
     {
         final String pnfsid = args.argv(0);
         _db.query(sqlGetPoolsForFile,
-                  new Object[] { pnfsid },
-                  new RowCallbackHandler() {
+                  new Object[]{pnfsid},
+                  new RowCallbackHandler()
+                  {
                       List<String> removeFile =
-                          Collections.singletonList(pnfsid);
+                              Collections.singletonList(pnfsid);
 
                       @Override
                       public void processRow(ResultSet rs)
-                          throws SQLException
+                              throws SQLException
                       {
                           try {
                               String pool = rs.getString("ilocation");
@@ -867,61 +858,5 @@ public class ChimeraCleaner extends AbstractCell implements Runnable
     protected void onFailure(URI uri)
     {
         _log.info("Failed to delete a file {} from HSM. Will try again later.", uri);
-    }
-
-    private class RemoveMessageCallback
-        extends AbstractMessageCallback<PoolRemoveFilesMessage>
-    {
-        private final String _poolName;
-        private final List<String> _filesToRemove;
-
-        RemoveMessageCallback(String poolName, List<String> filesToRemove) {
-            _poolName = poolName;
-            _filesToRemove = filesToRemove;
-        }
-
-        @Override
-        public synchronized void success(PoolRemoveFilesMessage message) {
-            try {
-                removeFiles(_poolName, _filesToRemove );
-            }finally{
-                notifyAll();
-            }
-        }
-
-        @Override
-        public synchronized void failure(int rc, Object o) {
-            try {
-                if( o instanceof String[] ) {
-                    Set<String> notRemoved =
-                        new HashSet<>(Arrays.asList((String[]) o));
-                    List<String> removed = new ArrayList<>(_filesToRemove);
-                    removed.removeAll(notRemoved);
-                    removeFiles(_poolName, removed);
-                }
-            } finally {
-                notifyAll();
-            }
-        }
-
-        @Override
-        public synchronized void noroute(CellPath path) {
-            try {
-                _log.warn("Pool {} is down.", _poolName);
-                _poolsBlackList.put(_poolName, System.currentTimeMillis());
-            } finally {
-                notifyAll();
-            }
-        }
-
-        @Override
-        public synchronized void timeout(CellPath path) {
-            try {
-                _log.warn("remove message to {} timed out.", _poolName);
-                _poolsBlackList.put(_poolName, System.currentTimeMillis());
-            } finally {
-                notifyAll();
-            }
-        }
     }
 }

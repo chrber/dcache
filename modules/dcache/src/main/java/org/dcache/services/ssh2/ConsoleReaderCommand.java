@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.util.Arrays;
 
 import diskCacheV111.admin.UserAdminShell;
 
@@ -32,6 +33,8 @@ import dmg.util.CommandSyntaxException;
 import dmg.util.CommandThrowableException;
 import dmg.util.RequestTimeOutException;
 import dmg.util.command.HelpFormat;
+
+import org.dcache.commons.util.Strings;
 
 /**
  * This class implements the Command Interface, which is part of the sshd-core
@@ -166,7 +169,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
 
     private void runAsciiMode() throws IOException {
         while (!_adminShellThread.isInterrupted()) {
-            String prompt = new ANSIBuffer().green(_userAdminShell.getPrompt()).toString(_useColors);
+            String prompt = new ANSIBuffer().bold(_userAdminShell.getPrompt()).toString(_useColors);
             String str = _console.readLine(prompt);
             Object result;
             try {
@@ -183,8 +186,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
                 }
                 result = _userAdminShell.executeCommand(str);
             } catch (CommandSyntaxException e) {
-                result = e.getMessage()
-                + " Please enter \'help\' to see all commands that can be used.";
+                result = e;
             } catch (IllegalArgumentException e) {
                 result = e.getMessage()
                 + " (Please check the spelling of your command or your config file(s)!)";
@@ -251,7 +253,7 @@ public class ConsoleReaderCommand implements Command, Runnable {
                     }
                     s = sb.toString(_useColors);
                 } else {
-                    s = result.toString();
+                    s = Strings.toMultilineString(result);
                 }
 
                 if (!s.isEmpty()) {

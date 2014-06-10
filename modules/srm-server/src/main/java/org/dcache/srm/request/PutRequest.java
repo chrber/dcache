@@ -77,6 +77,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import java.net.URI;
 import java.util.Arrays;
@@ -91,6 +92,7 @@ import org.dcache.srm.SRMUser;
 import org.dcache.srm.scheduler.FatalJobFailure;
 import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.scheduler.NonFatalJobFailure;
+import org.dcache.srm.scheduler.Scheduler;
 import org.dcache.srm.scheduler.State;
 import org.dcache.srm.v2_2.ArrayOfTPutRequestFileStatus;
 import org.dcache.srm.v2_2.SrmPrepareToPutResponse;
@@ -118,19 +120,19 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     private TOverwriteMode overwriteMode;
 
     public PutRequest(SRMUser user,
-    Long requestCredentialId,
-    URI[] surls,
-    long[] sizes,
-    boolean[] wantPermanent,
-    String[] protocols,
-    long lifetime,
-    long max_update_period,
-    int max_number_of_retries,
-    String client_host,
-    String spaceToken,
-    TRetentionPolicy retentionPolicy,
-    TAccessLatency accessLatency,
-    String description)
+        Long requestCredentialId,
+        URI[] surls,
+        Long[] sizes,
+        boolean[] wantPermanent,
+        String[] protocols,
+        long lifetime,
+        long max_update_period,
+        int max_number_of_retries,
+        String client_host,
+        @Nullable String spaceToken,
+        @Nullable TRetentionPolicy retentionPolicy,
+        @Nullable TAccessLatency accessLatency,
+        @Nullable String description)
     {
 
         super(user,
@@ -218,17 +220,29 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public void schedule() throws InterruptedException,
-    IllegalStateTransition {
+    public Class<? extends Job> getSchedulerType()
+    {
+        return PutFileRequest.class;
+    }
 
+    @Override
+    public void scheduleWith(Scheduler scheduler) throws InterruptedException,
+            IllegalStateTransition
+    {
         // save this request in request storage unconditionally
         // file requests will get stored as soon as they are
         // scheduled, and the saved state needs to be consistent
-
         saveJob(true);
+
         for (PutFileRequest request : getFileRequests()) {
-            request.schedule();
+            request.scheduleWith(scheduler);
         }
+    }
+
+    @Override
+    public void onSrmRestart(Scheduler scheduler)
+    {
+        // Nothing to do.
     }
 
     /**
@@ -242,7 +256,7 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public TReturnStatus abort()
+    public TReturnStatus abort(String reason)
     {
         wlock();
         try {
@@ -275,8 +289,10 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
             if (!state.isFinal()) {
                 for (PutFileRequest file : getFileRequests()) {
                     try {
-                        file.abort();
+                        file.abort(reason);
                         hasSuccess = true;
+                    } catch (SRMException e) {
+                        hasFailure = true;
                     } catch (IllegalStateTransition e) {
                         if (e.getFromState() == State.DONE) {
                             hasCompleted = true;
@@ -511,20 +527,7 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public void checkExpiration()
-    {
-        wlock();
-        try {
-            if (creationTime + lifetime < System.currentTimeMillis()) {
-                logger.debug("expiring job #{}", getId());
-                if (!getState().isFinal()) {
-                    setStateAndStatusCode(State.FAILED, "Total request time exceeded.", TStatusCode.SRM_REQUEST_TIMED_OUT);
-                }
-            }
-        } catch (IllegalStateTransition e) {
-            logger.error("Illegal state transition while expiring job: {}", e.toString());
-        } finally {
-            wunlock();
-        }
+    public String getNameForRequestType() {
+        return "Put";
     }
 }

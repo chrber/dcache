@@ -7,33 +7,21 @@
               http://www.springframework.org/schema/context
               http://www.springframework.org/schema/context/spring-context.xsd">
 
+  <context:property-placeholder/>
   <context:annotation-config/>
 
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
-
-  <bean id="scheduled-executor"
-        class="java.util.concurrent.Executors"
-        factory-method="newScheduledThreadPool"
-        destroy-method="shutdown">
-    <description>Task scheduler</description>
-    <constructor-arg value="1"/>
-  </bean>
-
-  <bean id="executor"
-      class="java.util.concurrent.ThreadPoolExecutor"
-      destroy-method="shutdown">
-    <description>Thread pool for message processing</description>
-    <constructor-arg value="1"/>
-    <constructor-arg value="${spacemanager.limits.threads}"/>
-    <constructor-arg value="60"/>
-    <constructor-arg value="SECONDS"/>
-    <constructor-arg>
-        <bean class="java.util.concurrent.LinkedBlockingQueue"/>
-    </constructor-arg>
-  </bean>
+    <bean id="executor"
+          class="org.dcache.util.BoundedExecutor"
+          destroy-method="shutdown">
+        <description>Thread pool for message processing</description>
+        <constructor-arg>
+            <bean class="java.util.concurrent.Executors"
+                  factory-method="newCachedThreadPool"
+                  destroy-method="shutdown">
+            </bean>
+        </constructor-arg>
+        <constructor-arg value="${spacemanager.limits.threads}"/>
+    </bean>
 
   <bean id="pool-manager-stub" class="org.dcache.cells.CellStub">
     <description>Pool manager communication stub</description>
@@ -42,10 +30,9 @@
     <property name="timeoutUnit" value="${srm.service.poolmanager.timeout.unit}"/>
   </bean>
 
-  <bean id="pool-monitor" class="org.dcache.poolmanager.RemotePoolMonitorFactoryBean" init-method="init">
+  <bean id="pool-monitor" class="org.dcache.poolmanager.RemotePoolMonitorFactoryBean">
     <description>Maintains runtime information about all pools</description>
     <property name="poolManagerStub" ref="pool-manager-stub"/>
-    <property name="executor" ref="scheduled-executor"/>
   </bean>
 
   <bean id="pnfs-stub" class="org.dcache.cells.CellStub">
@@ -67,7 +54,7 @@
             <bean class="com.zaxxer.hikari.HikariConfig">
                 <constructor-arg type="java.util.Properties">
                     <value>
-                        minimumPoolSize = ${spacemanager.db.connections.min}
+                        minimumIdle = ${spacemanager.db.connections.idle}
                         maximumPoolSize = ${spacemanager.db.connections.max}
                         autoCommit = true
                         transactionIsolation = TRANSACTION_READ_COMMITTED
@@ -75,7 +62,6 @@
                 </constructor-arg>
                 <property name="dataSource">
                     <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
-                        <property name="driverClassName" value="${spacemanager.db.driver}"/>
                         <property name="url" value="${spacemanager.db.url}"/>
                         <property name="username" value="${spacemanager.db.user}"/>
                         <property name="password" value="#{ T(diskCacheV111.util.Pgpass).getPassword('${spacemanager.db.password.file}', '${spacemanager.db.url}', '${spacemanager.db.user}', '${spacemanager.db.password}') }"/>
@@ -148,9 +134,8 @@
                      ${spacemanager.expire-space-reservation.period},
                      '${spacemanager.expire-space-reservation.period.unit}')}" />
     <property name="defaultAccessLatency" value="#{T(diskCacheV111.util.AccessLatency).getAccessLatency('${spacemanager.default-access-latency}')}" />
-    <property name="shouldReserveSpaceForNonSrmTransfers" value="${spacemanager.enable.reserve-space-for-non-srm-transfers}" />
+    <property name="allowUnreservedUploadsToLinkGroups" value="${spacemanager.enable.unreserved-uploads-to-linkgroups}" />
     <property name="shouldDeleteStoredFileRecord" value="false" />
-    <property name="shouldCleanupExpiredSpaceFiles" value="true" />
     <property name="shouldReturnFlushedSpaceToReservation" value="true" />
     <property name="authorizationPolicy" ref="authz-policy" />
   </bean>

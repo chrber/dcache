@@ -23,8 +23,8 @@ import dmg.cells.nucleus.LastMessageEvent;
 import dmg.cells.nucleus.MessageEvent;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.RoutedMessageEvent;
-import dmg.util.Args;
 
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 
 /**
@@ -174,7 +174,7 @@ public class SimpleTunnel implements Cell, Runnable, CellTunnel {
               CellMessage msg = (CellMessage) obj ;
               _log.info( " Message from tunnel : "+msg ) ;
               try{
-                 _nucleus.sendMessage( msg ) ;
+                  _nucleus.sendMessage(msg, true, true);
               }catch( NoRouteToCellException nrtce ){
                  _log.info( "Exception while resending message : "+nrtce ) ;
               }

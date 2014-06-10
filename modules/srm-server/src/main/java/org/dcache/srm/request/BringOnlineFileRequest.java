@@ -73,18 +73,21 @@ COPYRIGHT STATUS:
 package org.dcache.srm.request;
 
 import com.google.common.base.Joiner;
+import com.google.common.util.concurrent.CheckedFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import org.apache.axis.types.UnsignedLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 
 import java.net.URI;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import diskCacheV111.srm.RequestFileStatus;
 
 import org.dcache.srm.AbstractStorageElement;
 import org.dcache.srm.FileMetaData;
-import org.dcache.srm.PinCallbacks;
 import org.dcache.srm.SRM;
 import org.dcache.srm.SRMAuthorizationException;
 import org.dcache.srm.SRMException;
@@ -92,7 +95,6 @@ import org.dcache.srm.SRMInternalErrorException;
 import org.dcache.srm.SRMInvalidPathException;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.SRMUser;
-import org.dcache.srm.UnpinCallbacks;
 import org.dcache.srm.scheduler.FatalJobFailure;
 import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.scheduler.NonFatalJobFailure;
@@ -104,16 +106,20 @@ import org.dcache.srm.v2_2.TSURLReturnStatus;
 import org.dcache.srm.v2_2.TStatusCode;
 
 /**
- *
- * @author  timur
- * @version
+ * A BringOnlineFileRequest object represents the users desire that the system
+ * provide some level of guarantee of low-latency when initiating subsequent
+ * transfer requests against a particular file; i.e., that the file is brought
+ * into an "online state".  A BringOnlineRequest object is an aggregation of
+ * one or more BringOnlineFileRequest objects, representing the ability (in the
+ * SRM protocol) for the user to request multiple files be brought into a
+ * low-latency state with a single request.
  */
 public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest> {
     private final static Logger logger =
             LoggerFactory.getLogger(BringOnlineFileRequest.class);
 
     // the globus url class created from surl_string
-    private URI surl;
+    private final URI surl;
     private String pinId;
     private String fileId;
     private transient FileMetaData fileMetaData;
@@ -214,12 +220,7 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
     }
 
     public URI getSurl() {
-        rlock();
-        try {
-            return surl;
-        } finally {
-            runlock();
-        }
+        return surl;
     }
 
 
@@ -314,28 +315,30 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
     }
 
     @Override
-    public void toString(StringBuilder sb, boolean longformat) {
-        sb.append(" BringOnlineFileRequest ");
-        sb.append(" id:").append(getId());
-        sb.append(" priority:").append(getPriority());
-        sb.append(" creator priority:");
-        try {
-            sb.append(getUser().getPriority());
-        } catch (SRMInvalidRequestException ire) {
-            sb.append("Unknown");
+    public void toString(StringBuilder sb, String padding, boolean longformat) {
+        sb.append(padding);
+        if (padding.isEmpty()) {
+            sb.append("Bring online ");
+        }
+        sb.append("file id:").append(getId());
+        if (getPriority() != 0) {
+            sb.append(" priority:").append(getPriority());
         }
         sb.append(" state:").append(getState());
         if(longformat) {
-            sb.append('\n').append("   SURL: ").append(getSurl());
-            sb.append('\n').append("   pinned: ").append(isPinned());
+            sb.append('\n');
+            sb.append(padding).append("   SURL: ").append(getSurl()).append('\n');
+            sb.append(padding).append("   Pinned: ").append(isPinned()).append('\n');
             String thePinId = getPinId();
             if(thePinId != null) {
-                sb.append('\n').append("   pinid: ").append(thePinId);
+                sb.append(padding).append("   Pin id: ").append(thePinId).append('\n');
             }
-            sb.append('\n').append("   status code:").append(getStatusCode());
-            sb.append('\n').append("   error message:").append(getErrorMessage());
-            sb.append('\n').append("   History of State Transitions: \n");
-            sb.append(getHistory());
+            TStatusCode status = getStatusCode();
+            if (status != null) {
+                sb.append(padding).append("   Status:").append(status).append('\n');
+            }
+            sb.append(padding).append("   History of State Transitions:\n");
+            sb.append(getHistory(padding + "   "));
         }
     }
 
@@ -372,17 +375,36 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
             " state to \"Ready\"");
     }
 
-    public void askFileId() throws NonFatalJobFailure, FatalJobFailure {
-        try {
-        }
-        catch(Exception e) {
-            logger.error(e.toString());
-            throw new NonFatalJobFailure(e.toString());
+
+    @Override
+    protected void onSrmRestartForActiveJob(Scheduler scheduler)
+            throws IllegalStateTransition
+    {
+        State state = getState();
+
+        switch (state) {
+        case ASYNCWAIT:
+        case RETRYWAIT:
+            // FIXME: we should log the SRM restart in the job's history.
+            scheduler.schedule(this);
+            break;
+
+        case PRIORITYTQUEUED:
+        case RUNNING:
+            setState(State.RESTORED, "Rescheduled after SRM service restart");
+            scheduler.schedule(this);
+            break;
+
+        // All other states are invalid.
+        default:
+            setState(State.FAILED, "Invalid state (" + state + ") detected " +
+                    "after SRM service restart");
+            break;
         }
     }
 
     public void pinFile()
-        throws NonFatalJobFailure, FatalJobFailure, SRMException
+            throws NonFatalJobFailure, FatalJobFailure, SRMInvalidRequestException, SRMInternalErrorException
     {
         BringOnlineRequest request = getContainerRequest();
         String[] protocols = request.getProtocols();
@@ -398,12 +420,14 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
 
         URI surl = getSurl();
         logger.info("Pinning {}", surl);
-        getStorage().pinFile(getUser(),
-                             surl,
-                             getContainerRequest().getClient_host(),
-                             desiredPinLifetime,
-                             String.valueOf(getRequestId()),
-                             new ThePinCallbacks(getId()));
+        CheckedFuture<AbstractStorageElement.Pin,? extends SRMException> future =
+                getStorage().pinFile(
+                        getUser(),
+                        surl,
+                        getContainerRequest().getClient_host(),
+                        desiredPinLifetime,
+                        String.valueOf(getRequestId()));
+        future.addListener(new ThePinCallbacks(getId(), future), MoreExecutors.sameThreadExecutor());
     }
 
     @Override
@@ -420,10 +444,24 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
         }
         if(state == State.CANCELED || state == State.FAILED ) {
             if(getFileId() != null && getPinId() != null) {
-                UnpinCallbacks callbacks = new TheUnpinCallbacks(this.getId());
                 logger.info("state changed to final state, unpinning fileId= "+ getFileId()+" pinId = "+getPinId());
                 try {
-                    getStorage().unPinFile(getUser(),getFileId(),callbacks, getPinId());
+                    final CheckedFuture<String, ? extends SRMException> future =
+                            getStorage().unPinFile(getUser(), getFileId(), getPinId());
+                    future.addListener(new Runnable()
+                    {
+                        @Override
+                        public void run()
+                        {
+                            try {
+                                String pinId = future.checkedGet();
+                                logger.debug("File unpinned (pinId={}).", pinId);
+                            } catch (SRMException e) {
+                                logger.error("Unpinning failed: {}", e.getMessage());
+                            }
+
+                        }
+                    }, MoreExecutors.sameThreadExecutor());
                 }
                 catch (SRMInvalidRequestException ire) {
                     logger.error(ire.toString());
@@ -472,22 +510,18 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
             wunlock();
         }
 
-        TheUnpinCallbacks callbacks = new TheUnpinCallbacks(getId());
         logger.debug("srmReleaseFile, unpinning fileId={} pinId={}", fileId, pinId);
-        getStorage().unPinFile(user, fileId, callbacks, pinId);
+        CheckedFuture<String, ? extends SRMException> future =
+                getStorage().unPinFile(user, fileId, pinId);
         try {
-            callbacks.waitCompletion(60000);
-            if (!callbacks.isDone()) {
-                throw new SRMInternalErrorException("Operation timed out");
-            }
-            if (!callbacks.success) {
-                return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin SURL: " + callbacks.getError());
-            }
+            future.checkedGet(60, TimeUnit.SECONDS);
             setPinId(null);
             this.saveJob();
             return new TReturnStatus(TStatusCode.SRM_SUCCESS, null);
-        } catch (InterruptedException e) {
-            throw new SRMInternalErrorException("Operation interrupted");
+        } catch (TimeoutException e) {
+            throw new SRMInternalErrorException("Operation timed out.");
+        } catch (SRMException e) {
+            return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin SURL: " + e.getMessage());
         }
     }
 
@@ -507,8 +541,8 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
 
         switch (getState()) {
         case PENDING:
-        case RESTORED:
-        case RQUEUED:
+        case TQUEUED:
+        case RETRYWAIT:
             return new TReturnStatus(TStatusCode.SRM_REQUEST_QUEUED, description);
         case READY:
         case TRANSFERRING:
@@ -573,269 +607,64 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
         }
     }
 
-    private  static class ThePinCallbacks implements PinCallbacks {
+    private static class ThePinCallbacks implements Runnable
+    {
+        private final long fileRequestJobId;
+        private final CheckedFuture<AbstractStorageElement.Pin, ? extends SRMException> future;
 
-        final long fileRequestJobId;
-
-        public ThePinCallbacks(long fileRequestJobId) {
+        public ThePinCallbacks(long fileRequestJobId,
+                               CheckedFuture<AbstractStorageElement.Pin, ? extends SRMException> future)
+        {
             this.fileRequestJobId = fileRequestJobId;
-        }
-
-        public BringOnlineFileRequest getBringOnlineFileRequest()
-            throws SRMInvalidRequestException
-        {
-            return Job.getJob(fileRequestJobId, BringOnlineFileRequest.class);
+            this.future = future;
         }
 
         @Override
-        public void FileNotFound(String reason) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                try {
-                    fr.setStateAndStatusCode(
-                            State.FAILED,
-                            reason,
-                            TStatusCode.SRM_INVALID_PATH);
-                } catch(IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Unavailable(String reason)
+        public void run()
         {
             try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                try {
-                    fr.setStateAndStatusCode(
-                            State.FAILED,
-                            reason,
-                            TStatusCode.SRM_FILE_UNAVAILABLE);
-                }
-                catch(IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void AuthorizationError( String error) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                try {
-                    fr.setStateAndStatusCode(State.FAILED, error, TStatusCode.SRM_AUTHORIZATION_FAILURE);
-                } catch(IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Timeout() {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                if (!fr.getState().isFinal()) {
-                    fr.pinFile();
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            } catch (NonFatalJobFailure | FatalJobFailure | SRMException e) {
-                logger.error(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Pinned(FileMetaData fileMetaData, String pinId) {
-            try {
-                logger.debug("File pinned (pinId={}).", pinId);
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
+                BringOnlineFileRequest fr = Job.getJob(fileRequestJobId, BringOnlineFileRequest.class);
                 fr.wlock();
                 try {
+                    AbstractStorageElement.Pin pin = getPin();
+                    logger.debug("File pinned (pinId={}).", pin.pinId);
+
                     State state = fr.getState();
                     if (state == State.ASYNCWAIT || state == State.RUNNING) {
-                        fr.setFileId(fileMetaData.fileId);
-                        fr.fileMetaData = fileMetaData;
-                        fr.setPinId(pinId);
+                        fr.setFileId(pin.fileMetaData.fileId);
+                        fr.fileMetaData = pin.fileMetaData;
+                        fr.setPinId(pin.pinId);
                         fr.setState(State.DONE, "File is pinned.");
                     }
+                } catch (SRMInternalErrorException e) {
+                    if (!fr.getState().isFinal()) {
+                        Scheduler<?> scheduler =
+                                Scheduler.getScheduler(fr.getSchedulerId());
+                        scheduler.schedule(fr);
+                    }
+                } catch (SRMException e) {
+                    fr.setStateAndStatusCode(
+                            State.FAILED,
+                            e.getMessage(),
+                            e.getStatusCode());
                 } finally {
                     fr.wunlock();
                 }
             } catch (SRMInvalidRequestException e) {
                 logger.warn(e.getMessage());
             } catch (IllegalStateTransition e) {
-                logger.error(e.getMessage());
-            }
-        }
-
-        @Override
-        public void PinningFailed(String reason) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                try {
-                    fr.setState(State.FAILED,reason);
-                } catch(IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-    }
-
-    private static class TheUnpinCallbacks implements UnpinCallbacks {
-
-        Long fileRequestJobId;
-
-        public TheUnpinCallbacks(Long fileRequestJobId) {
-            this.fileRequestJobId = fileRequestJobId;
-        }
-
-        public BringOnlineFileRequest getBringOnlineFileRequest()
-                throws SRMInvalidRequestException {
-            if(fileRequestJobId != null) {
-                return Job.getJob(fileRequestJobId, BringOnlineFileRequest.class);
-            }
-            return null;
-        }
-
-        @Override
-        public void Error( String error) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                this.error = "Unpinning failed: "+ error;
-                logger.warn(this.error);
-                success = false;
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            } finally {
-                done();
-            }
-        }
-
-        @Override
-        public void Exception( Exception e) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                logger.error("Unpinning failed.", e);
-                this.error = "Unpinning failed: " + e.toString();
-                success = false;
-            } catch (SRMInvalidRequestException e1) {
-                logger.warn(e1.getMessage());
-            } finally {
-                done();
-            }
-        }
-
-
-
-
-        @Override
-        public void Timeout() {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                this.error = "Unpinning timed out.";
-                logger.error(this.error);
-                success = false;
-            } catch (SRMInvalidRequestException e) {
-                logger.error(e.getMessage());
-            } finally {
-                done();
-            }
-        }
-
-        @Override
-        public void Unpinned(String pinId) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                if(fr != null) {
-                    logger.debug("File unpinned (pinId={}).", pinId);
-                    State state = fr.getState();
-                   if(state == State.ASYNCWAIT) {
-                        fr.setPinId(pinId);
-                        Scheduler scheduler = Scheduler.getScheduler(fr.getSchedulerId());
-                       scheduler.schedule(fr);
-                    }
-                }
-                success = true;
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            } catch (InterruptedException e) {
-                logger.error(e.toString());
-            } catch (IllegalStateTransition e) {
-                logger.error(e.getMessage());
-            } finally {
-                done();
-            }
-        }
-
-        @Override
-        public void UnpinningFailed(String reason) {
-            try {
-                BringOnlineFileRequest fr = getBringOnlineFileRequest();
-                this.error = "Unpinning failed: "+ reason;
-                logger.error(this.error);
-                success = false;
-            } catch (SRMInvalidRequestException e) {
-                logger.error(e.getMessage());
-            } finally {
-                done();
-            }
-        }
-
-        private boolean done;
-        private boolean success  = true;
-        private String error;
-
-        public synchronized boolean  isSuccess() {
-            return done && success;
-        }
-        public  boolean waitCompletion(long timeout) throws InterruptedException {
-           long starttime = System.currentTimeMillis();
-            while(true) {
-                synchronized(this) {
-                    wait(1000);
-                    if(done) {
-                        return success;
-                    }
-                    else
-                    {
-                        if((System.currentTimeMillis() - starttime)>timeout) {
-                            error = "Unpinning timed out.";
-                            return false;
-                        }
-                    }
+                if (!e.getFromState().isFinal()) {
+                    logger.error(e.getMessage());
                 }
             }
         }
 
-        public  synchronized void done() {
-            done = true;
-            notifyAll();
-        }
-
-        public String getError() {
-            return error;
-        }
-
-        public synchronized  boolean  isDone() {
-            return done;
+        /* Workaround for a problem with the Java compiler. If inlined it gets confused
+         * about which exceptions the statement can throw.
+         */
+        private AbstractStorageElement.Pin getPin() throws SRMException
+        {
+            return future.checkedGet();
         }
     }
 
@@ -856,20 +685,14 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
             return new TReturnStatus(TStatusCode.SRM_FAILURE, e.getMessage());
         }
 
-        BringOnlineFileRequest.TheUnpinCallbacks unpinCallbacks =
-                new BringOnlineFileRequest.TheUnpinCallbacks(null);
-        storage.unPinFileBySrmRequestId(user, fileId, unpinCallbacks, requestToken);
+        CheckedFuture<String, ? extends SRMException> future =
+                storage.unPinFileBySrmRequestId(user, fileId, requestToken);
         try {
-            unpinCallbacks.waitCompletion(60000);
-            if (!unpinCallbacks.isDone()) {
-                throw new SRMInternalErrorException("Operation timed out");
-            }
-            if (!unpinCallbacks.isSuccess()) {
-                return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin: " + unpinCallbacks.getError());
-            }
-        } catch (InterruptedException ie) {
-            logger.error(ie.toString());
-            throw new SRMInternalErrorException("Operation interrupted");
+            future.checkedGet(60, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new SRMInternalErrorException("Operation timed out");
+        } catch (SRMException e) {
+            return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin: " + e.getMessage());
         }
         return new TReturnStatus(TStatusCode.SRM_SUCCESS, null);
     }
@@ -890,20 +713,13 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
             return new TReturnStatus(TStatusCode.SRM_FAILURE, e.getMessage());
         }
 
-        BringOnlineFileRequest.TheUnpinCallbacks unpinCallbacks =
-                new BringOnlineFileRequest.TheUnpinCallbacks(null);
-        storage.unPinFile(user, fileId, unpinCallbacks);
+        CheckedFuture<String, ? extends SRMException> future = storage.unPinFile(user, fileId);
         try {
-            unpinCallbacks.waitCompletion(60000); //one minute
-            if (!unpinCallbacks.isDone()) {
-                throw new SRMInternalErrorException("Operation timed out");
-            }
-            if (!unpinCallbacks.isSuccess()) {
-                return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin: " + unpinCallbacks.getError());
-            }
-        } catch (InterruptedException ie) {
-            logger.error(ie.toString());
-            throw new SRMInternalErrorException("Operation interrupted");
+            future.checkedGet(60, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new SRMInternalErrorException("Operation timed out");
+        } catch (SRMException e) {
+            return new TReturnStatus(TStatusCode.SRM_FAILURE, "Failed to unpin: " + e.getMessage());
         }
         return new TReturnStatus(TStatusCode.SRM_SUCCESS, null);
     }

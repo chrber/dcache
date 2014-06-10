@@ -1,5 +1,3 @@
-// $Id$
-
 /*
 COPYRIGHT STATUS:
   Dec 1st 2001, Fermi National Accelerator Laboratory (FNAL) documents and
@@ -65,16 +63,28 @@ COPYRIGHT STATUS:
   obligated to secure any necessary Government licenses before exporting
   documents or software obtained from this server.
  */
-
-
-
 package diskCacheV111.srm.dcache;
 
+import com.google.common.base.Function;
+import com.google.common.base.Optional;
+import com.google.common.base.Predicate;
+import com.google.common.base.Supplier;
+import com.google.common.base.Suppliers;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multimaps;
+import com.google.common.collect.Ordering;
 import com.google.common.collect.Range;
+import com.google.common.primitives.Ints;
+import com.google.common.util.concurrent.CheckedFuture;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.SettableFuture;
 import org.apache.axis.types.UnsignedLong;
 import org.globus.gsi.gssapi.GlobusGSSCredentialImpl;
 import org.ietf.jgss.GSSCredential;
@@ -82,7 +92,6 @@ import org.ietf.jgss.GSSException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Required;
-import org.springframework.dao.DataAccessException;
 
 import javax.annotation.Nonnull;
 import javax.naming.NamingEnumeration;
@@ -93,8 +102,6 @@ import javax.naming.directory.DirContext;
 import javax.naming.directory.InitialDirContext;
 import javax.security.auth.Subject;
 
-import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -103,30 +110,30 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import diskCacheV111.poolManager.CostModule;
+import diskCacheV111.namespace.NameSpaceProvider;
 import diskCacheV111.poolManager.PoolMonitorV5;
-import diskCacheV111.pools.PoolCostInfo;
 import diskCacheV111.services.space.Space;
 import diskCacheV111.services.space.SpaceState;
 import diskCacheV111.services.space.message.ExtendLifetime;
 import diskCacheV111.services.space.message.GetFileSpaceTokensMessage;
 import diskCacheV111.services.space.message.GetSpaceMetaData;
 import diskCacheV111.services.space.message.GetSpaceTokens;
-import diskCacheV111.srm.StorageElementInfo;
 import diskCacheV111.util.AccessLatency;
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FileExistsCacheException;
@@ -139,11 +146,13 @@ import diskCacheV111.util.PermissionDeniedCacheException;
 import diskCacheV111.util.PnfsHandler;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.RetentionPolicy;
-import diskCacheV111.util.ThreadManager;
 import diskCacheV111.util.TimeoutCacheException;
 import diskCacheV111.vehicles.CopyManagerMessage;
+import diskCacheV111.vehicles.DoorRequestInfoMessage;
 import diskCacheV111.vehicles.IpProtocolInfo;
-import diskCacheV111.vehicles.PoolManagerGetPoolMonitor;
+import diskCacheV111.vehicles.PnfsCancelUpload;
+import diskCacheV111.vehicles.PnfsCommitUpload;
+import diskCacheV111.vehicles.PnfsCreateUploadPath;
 import diskCacheV111.vehicles.RemoteHttpDataTransferProtocolInfo;
 import diskCacheV111.vehicles.transferManager.CancelTransferMessage;
 import diskCacheV111.vehicles.transferManager.RemoteGsiftpTransferProtocolInfo;
@@ -152,23 +161,21 @@ import diskCacheV111.vehicles.transferManager.TransferCompleteMessage;
 import diskCacheV111.vehicles.transferManager.TransferFailedMessage;
 import diskCacheV111.vehicles.transferManager.TransferManagerMessage;
 
-import dmg.cells.nucleus.CellMessage;
-import dmg.cells.nucleus.CellPath;
+import dmg.cells.nucleus.AbstractCellComponent;
+import dmg.cells.nucleus.CDC;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.services.login.LoginBrokerInfo;
-import dmg.util.Args;
 
 import org.dcache.acl.enums.AccessMask;
 import org.dcache.acl.enums.AccessType;
+import org.dcache.auth.Origin;
 import org.dcache.auth.Subjects;
-import dmg.cells.nucleus.AbstractCellComponent;
 import org.dcache.cells.AbstractMessageCallback;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
-import org.dcache.commons.util.Strings;
 import org.dcache.namespace.ACLPermissionHandler;
 import org.dcache.namespace.ChainedPermissionHandler;
+import org.dcache.namespace.CreateOption;
 import org.dcache.namespace.FileAttribute;
 import org.dcache.namespace.FileType;
 import org.dcache.namespace.PermissionHandler;
@@ -179,27 +186,23 @@ import org.dcache.srm.AbstractStorageElement;
 import org.dcache.srm.AdvisoryDeleteCallbacks;
 import org.dcache.srm.CopyCallbacks;
 import org.dcache.srm.FileMetaData;
-import org.dcache.srm.PinCallbacks;
-import org.dcache.srm.PrepareToPutCallbacks;
-import org.dcache.srm.PrepareToPutInSpaceCallbacks;
 import org.dcache.srm.RemoveFileCallback;
 import org.dcache.srm.SRM;
+import org.dcache.srm.SRMAbortedException;
 import org.dcache.srm.SRMAuthorizationException;
 import org.dcache.srm.SRMDuplicationException;
+import org.dcache.srm.SRMExceedAllocationException;
 import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMInternalErrorException;
 import org.dcache.srm.SRMInvalidPathException;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.SRMNonEmptyDirectoryException;
+import org.dcache.srm.SRMNotSupportedException;
+import org.dcache.srm.SRMSpaceLifetimeExpiredException;
 import org.dcache.srm.SRMUser;
-import org.dcache.srm.SrmCancelUseOfSpaceCallbacks;
 import org.dcache.srm.SrmReleaseSpaceCallback;
 import org.dcache.srm.SrmReserveSpaceCallback;
-import org.dcache.srm.SrmUseSpaceCallbacks;
-import org.dcache.srm.UnpinCallbacks;
-import org.dcache.srm.request.Job;
 import org.dcache.srm.request.RequestCredential;
-import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.util.Configuration;
 import org.dcache.srm.util.Permissions;
 import org.dcache.srm.util.Tools;
@@ -209,7 +212,7 @@ import org.dcache.srm.v2_2.TRetentionPolicy;
 import org.dcache.srm.v2_2.TRetentionPolicyInfo;
 import org.dcache.srm.v2_2.TReturnStatus;
 import org.dcache.srm.v2_2.TStatusCode;
-import dmg.cells.services.login.LoginBrokerHandler;
+import org.dcache.util.CacheExceptionFactory;
 import org.dcache.util.Version;
 import org.dcache.util.list.DirectoryEntry;
 import org.dcache.util.list.DirectoryListPrinter;
@@ -218,9 +221,13 @@ import org.dcache.util.list.DirectoryStream;
 import org.dcache.util.list.NullListPrinter;
 import org.dcache.vehicles.FileAttributes;
 
+import static com.google.common.base.Predicates.in;
+import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.Iterables.filter;
 import static com.google.common.net.InetAddresses.isInetAddress;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.MINUTES;
+import static com.google.common.util.concurrent.Futures.immediateFailedCheckedFuture;
+import static java.util.Arrays.asList;
+import static java.util.concurrent.TimeUnit.*;
 import static org.dcache.namespace.FileAttribute.*;
 
 /**
@@ -231,8 +238,7 @@ import static org.dcache.namespace.FileAttribute.*;
  */
 public final class Storage
     extends AbstractCellComponent
-    implements AbstractStorageElement, Runnable,
-               CellCommandListener, CellMessageReceiver
+    implements AbstractStorageElement, CellMessageReceiver
 {
     private final static Logger _log = LoggerFactory.getLogger(Storage.class);
 
@@ -247,13 +253,6 @@ public final class Storage
 
     private final static String SFN_STRING = "SFN=";
 
-    /**
-     * The delay we use after transient failures that should be
-     * retried immediately. The small delay prevents tight retry
-     * loops.
-     */
-    private final static long TRANSIENT_FAILURE_DELAY =
-        MILLISECONDS.toMillis(10);
     private static final Version VERSION = Version.of(Storage.class);
 
     private CellStub _pnfsStub;
@@ -263,33 +262,91 @@ public final class Storage
     private CellStub _transferManagerStub;
     private CellStub _pinManagerStub;
     private CellStub _loginBrokerStub;
-    private CellStub _gplazmaStub;
+    private CellStub _billingStub;
 
     private PnfsHandler _pnfs;
     private final PermissionHandler permissionHandler =
             new ChainedPermissionHandler(new ACLPermissionHandler(),
                                          new PosixPermissionHandler());
     private final Set<FileAttribute> attributesRequiredForRmdir;
+    private Executor _executor;
 
     private PoolMonitor _poolMonitor;
 
-    private SRM srm;
     private Configuration config;
-    private Thread storageInfoUpdateThread;
     private boolean customGetHostByAddr; //falseByDefault
-
-    private FsPath _xrootdRootPath;
-    private FsPath _httpRootPath;
 
     private DirectoryListSource _listSource;
 
     private boolean _isOnlinePinningEnabled = true;
     private boolean _isSpaceManagerEnabled;
 
+    private Supplier<Multimap<String,LoginBrokerInfo>> loginBrokerInfo;
+    private final Random rand = new Random();
+    private int numDoorInRanSelection = 3;
+
+    /**
+     * A loading cache for looking up space reservations by space token.
+     *
+     * Used during  uploads to verify the availability of a space reservation. In case
+     * of stale data, a TURL may be handed out to the client even though the reservation
+     * doesn't exist or is full. In that case the upload to the TURL will fail. This is
+     * however a failure path to would exist in any case, as the reservation may expire
+     * after handing out the TURL.
+     */
+    private final LoadingCache<String,Optional<Space>> spaces =
+            CacheBuilder.newBuilder()
+                    .maximumSize(1000)
+                    .expireAfterWrite(10, MINUTES)
+                    .refreshAfterWrite(30, SECONDS)
+                    .build(
+                            new CacheLoader<String, Optional<Space>>()
+                            {
+                                @Override
+                                public Optional<Space> load(String token)
+                                        throws CacheException, NoRouteToCellException, InterruptedException
+                                {
+                                    Space space =
+                                            _spaceManagerStub.sendAndWait(new GetSpaceMetaData(token)).getSpaces()[0];
+                                    return Optional.fromNullable(space);
+                                }
+
+                                @Override
+                                public ListenableFuture<Optional<Space>> reload(String token, Optional<Space> oldValue)
+                                {
+                                    final SettableFuture<Optional<Space>> future = SettableFuture.create();
+                                    CellStub.addCallback(
+                                            _spaceManagerStub.send(new GetSpaceMetaData(token)),
+                                            new AbstractMessageCallback<GetSpaceMetaData>()
+                                            {
+                                                @Override
+                                                public void success(GetSpaceMetaData message)
+                                                {
+                                                    future.set(Optional.fromNullable(message.getSpaces()[0]));
+                                                }
+
+                                                public void failure(int rc, Object error)
+                                                {
+                                                    CacheException exception = CacheExceptionFactory.exceptionOf(
+                                                            rc, Objects.toString(error, null));
+                                                    future.setException(exception);
+                                                }
+                                            }, MoreExecutors.sameThreadExecutor());
+                                    return future;
+                                }
+                            });
+
+
     public Storage()
     {
         attributesRequiredForRmdir = EnumSet.of(TYPE);
         attributesRequiredForRmdir.addAll(permissionHandler.getRequiredAttributes());
+    }
+
+    @Required
+    public void setExecutor(Executor executor)
+    {
+        _executor = executor;
     }
 
     @Required
@@ -322,6 +379,12 @@ public final class Storage
     }
 
     @Required
+    public void setPoolMonitor(PoolMonitor poolMonitor)
+    {
+        _poolMonitor = poolMonitor;
+    }
+
+    @Required
     public void setTransferManagerStub(CellStub transferManagerStub)
     {
         _transferManagerStub = transferManagerStub;
@@ -340,9 +403,9 @@ public final class Storage
     }
 
     @Required
-    public void setGplazmaStub(CellStub gplazmaStub)
+    public void setBillingStub(CellStub billingStub)
     {
-        _gplazmaStub = gplazmaStub;
+        _billingStub = billingStub;
     }
 
     @Required
@@ -352,27 +415,9 @@ public final class Storage
     }
 
     @Required
-    public void setHttpRootPath(String path)
-    {
-        _httpRootPath = new FsPath(path);
-    }
-
-    @Required
-    public void setXrootdRootPath(String path)
-    {
-        _xrootdRootPath = new FsPath(path);
-    }
-
-    @Required
     public void setConfiguration(Configuration config)
     {
         this.config = config;
-    }
-
-    @Required
-    public void setSrm(SRM srm)
-    {
-        this.srm = srm;
     }
 
     public String[] getSrmPutNotSupportedProtocols()
@@ -413,9 +458,11 @@ public final class Storage
         _isOnlinePinningEnabled = value;
     }
 
+    @Required
     public void setLoginBrokerUpdatePeriod(long period)
     {
-        LOGINBROKERINFO_VALIDITYSPAN = period;
+        loginBrokerInfo =
+                Suppliers.memoizeWithExpiration(new LoginBrokerInfoSupplier(), period, TimeUnit.MILLISECONDS);
     }
 
     public void setNumberOfDoorsInRandomSelection(int value)
@@ -428,726 +475,194 @@ public final class Storage
         customGetHostByAddr = value;
     }
 
-    public void start() throws CacheException, IOException,
-            InterruptedException, IllegalStateTransition
-    {
-        _log.info("Starting SRM");
-
-        while (_poolMonitor == null) {
-            try {
-                _poolMonitor =
-                    _poolManagerStub.sendAndWait(new PoolManagerGetPoolMonitor()).getPoolMonitor();
-            } catch (CacheException e) {
-                _log.error(e.toString());
-                Thread.sleep(TRANSIENT_FAILURE_DELAY);
-            }
-        }
-
-        storageInfoUpdateThread = new Thread(this);
-        storageInfoUpdateThread.start();
-    }
-
-    public void stop()
-    {
-        storageInfoUpdateThread.interrupt();
-    }
-
     @Required
     public void setDirectoryListSource(DirectoryListSource source)
     {
         _listSource = source;
     }
 
-    @Required
-    public void setLoginBrokerHandler(LoginBrokerHandler handler)
-        throws UnknownHostException
-    {
-        handler.setAddresses(Arrays.asList(InetAddress.getAllByName(InetAddress.getLocalHost().getHostName())));
-        handler.setLoad(new LoginBrokerHandler.LoadProvider() {
-                @Override
-                public double getLoad() {
-                    return (srm == null) ? 0 : srm.getLoad();
-                }
-            });
-    }
-
-    @Override
-    public void getInfo(PrintWriter pw)
-    {
-        StorageElementInfo info = getStorageElementInfo();
-        if (info != null) {
-            pw.println(info);
-        }
-
-        pw.println(config);
-
-        StringBuilder sb = new StringBuilder();
-        srm.printGetSchedulerInfo(sb);
-        srm.printPutSchedulerInfo(sb);
-        srm.printCopySchedulerInfo(sb);
-        srm.printBringOnlineSchedulerInfo(sb);
-        srm.printLsSchedulerInfo(sb);
-        pw.println(sb);
-    }
-
-    public final static String hh_set_switch_to_async_mode_delay_get =
-        "<milliseconds>";
-    public final static String fh_set_switch_to_async_mode_delay_get =
-        "Sets the time after which get requests are processed asynchronously.\n" +
-        "Use 'infinity' to always use synchronous replies and use 0 to\n" +
-        "always use asynchronous replies.";
-    public String ac_set_switch_to_async_mode_delay_get_$_1(Args args)
-    {
-        config.setGetSwitchToAsynchronousModeDelay(Strings.parseTime(args.argv(0), TimeUnit.MILLISECONDS));
-        return "";
-    }
-
-    public final static String hh_set_switch_to_async_mode_delay_put =
-        "<milliseconds>";
-    public final static String fh_set_switch_to_async_mode_delay_put =
-        "Sets the time after which put requests are processed asynchronously.\n" +
-        "Use 'infinity' to always use synchronous replies and use 0 to\n" +
-        "always use asynchronous replies.";
-    public String ac_set_switch_to_async_mode_delay_put_$_1(Args args)
-    {
-        config.setPutSwitchToAsynchronousModeDelay(Strings.parseTime(args.argv(0), TimeUnit.MILLISECONDS));
-        return "";
-    }
-
-    public final static String hh_set_switch_to_async_mode_delay_ls =
-        "<milliseconds>";
-    public final static String fh_set_switch_to_async_mode_delay_ls =
-        "Sets the time after which ls requests are processed asynchronously.\n" +
-        "Use 'infinity' to always use synchronous replies and use 0 to\n" +
-        "always use asynchronous replies.";
-    public String ac_set_switch_to_async_mode_delay_ls_$_1(Args args)
-    {
-        config.setLsSwitchToAsynchronousModeDelay(Strings.parseTime(args.argv(0), TimeUnit.MILLISECONDS));
-        return "";
-    }
-
-    public final static String hh_set_switch_to_async_mode_delay_bring_online =
-        "<milliseconds>";
-    public final static String fh_set_switch_to_async_mode_delay_bring_online =
-        "Sets the time after which bring online requests are processed\n" +
-        "asynchronously. Use 'infinity' to always use synchronous replies\n" +
-        "and use 0 to always use asynchronous replies.";
-    public String ac_set_switch_to_async_mode_delay_bring_online_$_1(Args args)
-    {
-        config.setBringOnlineSwitchToAsynchronousModeDelay(Strings.parseTime(args.argv(0), TimeUnit.MILLISECONDS));
-        return "";
-    }
-
-    private static final ImmutableMap<String,String> OPTION_TO_PARAMETER_SET =
-        new ImmutableMap.Builder<String,String>()
-        .put("get", Configuration.GET_PARAMETERS)
-        .put("put", Configuration.PUT_PARAMETERS)
-        .put("ls", Configuration.LS_PARAMETERS)
-        .put("bringonline", Configuration.BRINGONLINE_PARAMETERS)
-        .put("reserve", Configuration.RESERVE_PARAMETERS)
-        .build();
-
-    public final static String fh_db_history_log= " Syntax: db history log [on|off] "+
-        "# show status or enable db history log ";
-    public final static String hh_db_history_log= "[-get] [-put] [-bringonline] [-ls] [-copy] [-reserve] [on|off] " +
-        "# show status or enable db history log ";
-    public String ac_db_history_log_$_0_1(Args args)
-    {
-        Collection<String> sets = new ArrayList<>();
-        for (Map.Entry<String,String> e: OPTION_TO_PARAMETER_SET.entrySet()) {
-            if (args.hasOption(e.getKey())) {
-                sets.add(e.getValue());
-            }
-        }
-
-        if (sets.isEmpty()) {
-            sets = OPTION_TO_PARAMETER_SET.values();
-        }
-
-        if (args.argc() > 0) {
-            String arg = args.argv(0);
-            if (!arg.equals("on") && !arg.equals("off")){
-                return "syntax error";
-            }
-            for (String set: sets) {
-                config.getDatabaseParameters(set).setRequestHistoryDatabaseEnabled(arg.equals("on"));
-            }
-        }
-
-        StringBuilder s = new StringBuilder();
-        for (String set: sets) {
-            Configuration.DatabaseParameters parameters = config.getDatabaseParameters(set);
-            s.append("db history logging for ").append(set).append(" is ")
-                .append((parameters.isRequestHistoryDatabaseEnabled()
-                         ? "enabled"
-                         : "disabled")).append("\n");
-        }
-        return s.toString();
-    }
-
-    public final static String fh_cancel= " Syntax: cancel <id> ";
-    public final static String hh_cancel= " <id> ";
-    public String ac_cancel_$_1(Args args) {
-        try {
-            Long id = Long.valueOf(args.argv(0));
-            StringBuilder sb = new StringBuilder();
-            srm.cancelRequest(sb, id);
-            return sb.toString();
-        } catch (SRMInvalidRequestException ire) {
-            return "Invalid request: "+ire.getMessage();
-        } catch (NumberFormatException e) {
-            return e.toString();
-        }
-    }
-
-    public final static String fh_cancelall= " Syntax: cancel [-get] [-put] [-copy] [-bring] [-reserve] <pattern> ";
-    public final static String hh_cancelall= " [-get] [-put] [-copy] [-bring] [-reserve] <pattern> ";
-    public String ac_cancelall_$_1(Args args) {
-        try {
-            boolean get=args.hasOption("get");
-            boolean put=args.hasOption("put");
-            boolean copy=args.hasOption("copy");
-            boolean bring=args.hasOption("bring");
-            boolean reserve=args.hasOption("reserve");
-            boolean ls=args.hasOption("ls");
-            if( !get && !put && !copy && !bring && !reserve && !ls ) {
-                get=true;
-                put=true;
-                copy=true;
-                bring=true;
-                reserve=true;
-                ls=true;
-            }
-            String pattern = args.argv(0);
-            StringBuilder sb = new StringBuilder();
-            if(get) {
-                _log.debug("calling srm.cancelAllGetRequest(\""+pattern+"\")");
-                srm.cancelAllGetRequest(sb, pattern);
-            }
-            if(bring) {
-                _log.debug("calling srm.cancelAllBringOnlineRequest(\""+pattern+"\")");
-                srm.cancelAllBringOnlineRequest(sb, pattern);
-            }
-            if(put) {
-                _log.debug("calling srm.cancelAllPutRequest(\""+pattern+"\")");
-                srm.cancelAllPutRequest(sb, pattern);
-            }
-            if(copy) {
-                _log.debug("calling srm.cancelAllCopyRequest(\""+pattern+"\")");
-                srm.cancelAllCopyRequest(sb, pattern);
-            }
-            if(reserve) {
-                _log.debug("calling srm.cancelAllReserveSpaceRequest(\""+pattern+"\")");
-                srm.cancelAllReserveSpaceRequest(sb, pattern);
-            }
-            if(ls) {
-                _log.debug("calling srm.cancelAllLsRequests(\""+pattern+"\")");
-                srm.cancelAllLsRequests(sb, pattern);
-            }
-            return sb.toString();
-        } catch (DataAccessException | SRMException e) {
-            _log.warn("Failure in cancelall: " + e.getMessage());
-            return e.toString();
-        }
-    }
-    public final static String fh_ls= " Syntax: ls [-get] [-put] [-copy] [-bring] [-reserve] [-ls] [-l] [<id>] "+
-            "#will list all requests";
-    public final static String hh_ls= " [-get] [-put] [-copy] [-bring] [-reserve] [-ls] [-l] [<id>]";
-    public String ac_ls_$_0_1(Args args) throws SRMInvalidRequestException, DataAccessException
-    {
-        boolean get=args.hasOption("get");
-        boolean put=args.hasOption("put");
-        boolean copy=args.hasOption("copy");
-        boolean bring=args.hasOption("bring");
-        boolean reserve=args.hasOption("reserve");
-        boolean ls=args.hasOption("ls");
-        boolean longformat = args.hasOption("l");
-        StringBuilder sb = new StringBuilder();
-        if(args.argc() == 1) {
-            try {
-                Long reqId = Long.valueOf(args.argv(0));
-                srm.listRequest(sb, reqId, longformat);
-            } catch( NumberFormatException nfe) {
-                return "id must be an integer, you gave id="+args.argv(0);
-            }
-        } else {
-            if( !get && !put && !copy && !bring && !reserve && !ls) {
-                get=true;
-                put=true;
-                copy=true;
-                bring=true;
-                reserve=true;
-                ls=true;
-            }
-            if(get) {
-                sb.append("Get Requests:\n");
-                srm.listGetRequests(sb);
-            }
-            if(put) {
-                sb.append("Put Requests:\n");
-                srm.listPutRequests(sb);
-            }
-            if(copy) {
-                sb.append("Copy Requests:\n");
-                srm.listCopyRequests(sb);
-            }
-            if(copy) {
-                sb.append("Bring Online Requests:\n");
-                srm.listBringOnlineRequests(sb);
-            }
-            if(reserve) {
-                sb.append("Reserve Space Requests:\n");
-                srm.listReserveSpaceRequests(sb);
-            }
-            if(ls) {
-                sb.append("Ls Requests:\n");
-                srm.listLsRequests(sb);
-            }
-        }
-        return sb.toString();
-    }
-    public final static String fh_ls_queues= " Syntax: ls queues " +
-        "[-get] [-put] [-copy] [-bring] [-ls] [-l]  "+
-            "#will list schedule queues";
-    public final static String hh_ls_queues= " [-get] [-put] [-copy] [-bring] [-ls] [-l] ";
-    public String ac_ls_queues_$_0(Args args) {
-        boolean get=args.hasOption("get");
-        boolean put=args.hasOption("put");
-        boolean ls=args.hasOption("ls");
-        boolean copy=args.hasOption("copy");
-        boolean bring=args.hasOption("bring");
-        StringBuilder sb = new StringBuilder();
-
-        if( !get && !put && !copy && !bring && !ls ) {
-            get=true;
-            put=true;
-            copy=true;
-            bring=true;
-            ls=true;
-        }
-        if(get) {
-            sb.append("Get Request Scheduler:\n");
-            srm.printGetSchedulerThreadQueue(sb);
-            srm.printGetSchedulerPriorityThreadQueue(sb);
-            srm.printGetSchedulerReadyThreadQueue(sb);
-            sb.append('\n');
-        }
-        if(put) {
-            sb.append("Put Request Scheduler:\n");
-            srm.printPutSchedulerThreadQueue(sb);
-            srm.printPutSchedulerPriorityThreadQueue(sb);
-            srm.printPutSchedulerReadyThreadQueue(sb);
-            sb.append('\n');
-        }
-        if(copy) {
-            sb.append("Copy Request Scheduler:\n");
-            srm.printCopySchedulerThreadQueue(sb);
-            srm.printCopySchedulerPriorityThreadQueue(sb);
-            srm.printCopySchedulerReadyThreadQueue(sb);
-            sb.append('\n');
-        }
-        if(bring) {
-            sb.append("Bring Online Request Scheduler:\n");
-            srm.printBringOnlineSchedulerThreadQueue(sb);
-            srm.printBringOnlineSchedulerPriorityThreadQueue(sb);
-            srm.printBringOnlineSchedulerReadyThreadQueue(sb);
-            sb.append('\n');
-        }
-        if(ls) {
-            sb.append("Ls Request Scheduler:\n");
-            srm.printLsSchedulerThreadQueue(sb);
-            srm.printLsSchedulerPriorityThreadQueue(sb);
-            srm.printLsSchedulerReadyThreadQueue(sb);
-            sb.append('\n');
-        }
-        return sb.toString();
-    }
-
-    public final static String fh_ls_completed= " Syntax: ls completed [-get] [-put]" +
-        " [-copy] [max_count]"+
-            " #will list completed (done, failed or canceled) requests, " +
-        "if max_count is not specified, it is set to 50";
-    public final static String hh_ls_completed= " [-get] [-put] [-copy] [max_count]";
-    public String ac_ls_completed_$_0_1(Args args) throws DataAccessException
-    {
-        boolean get=args.hasOption("get");
-        boolean put=args.hasOption("put");
-        boolean copy=args.hasOption("copy");
-        int max_count=50;
-        if(args.argc() == 1) {
-            max_count = Integer.parseInt(args.argv(0));
-        }
-
-        if( !get && !put && !copy ) {
-            get=true;
-            put=true;
-            copy=true;
-
-        }
-        StringBuilder sb = new StringBuilder();
-        if(get) {
-            sb.append("Get Requests:\n");
-            srm.listLatestCompletedGetRequests(sb, max_count);
-            sb.append('\n');
-        }
-        if(put) {
-            sb.append("Put Requests:\n");
-            srm.listLatestCompletedPutRequests(sb, max_count);
-            sb.append('\n');
-        }
-        if(copy) {
-            sb.append("Copy Requests:\n");
-            srm.listLatestCompletedCopyRequests(sb, max_count);
-            sb.append('\n');
-        }
-        return sb.toString();
-    }
-
-    public final static String fh_set_job_priority= " Syntax: set priority <requestId> <priority>"+
-            "will set priority for the requestid";
-    public final static String hh_set_job_priority=" <requestId> <priority>";
-
-    public String ac_set_job_priority_$_2(Args args) {
-        String s1 = args.argv(0);
-        String s2 = args.argv(1);
-        long requestId;
-        int priority;
-        try {
-            requestId = Integer.parseInt(s1);
-        } catch (NumberFormatException e) {
-            return "Failed to parse request id: " + s1;
-        }
-        try {
-            priority = Integer.parseInt(s2);
-        } catch (Exception e) {
-            return "Failed to parse priority: "+s2;
-        }
-        try {
-            Job job = Job.getJob(requestId, Job.class);
-            job.setPriority(priority);
-            job.setPriority(priority);
-            StringBuilder sb = new StringBuilder();
-            srm.listRequest(sb, requestId, true);
-            return sb.toString();
-        } catch (SRMInvalidRequestException e) {
-            return e.getMessage() + "\n";
-        } catch (DataAccessException e) {
-            _log.warn("Failure in set job priority: " + e.getMessage());
-            return e.toString();
-        }
-    }
-
-
-    public final static String fh_set_max_ready_put= " Syntax: set max ready put <count>"+
-            " #will set a maximum number of put requests in the ready state";
-    public final static String hh_set_max_ready_put= " <count>";
-    public String ac_set_max_ready_put_$_1(Args args) throws Exception{
-        if(args.argc() != 1) {
-            throw new IllegalArgumentException("count is not specified");
-        }
-        int value = Integer.parseInt(args.argv(0));
-        config.setPutMaxReadyJobs(value);
-        srm.getPutRequestScheduler().setMaxReadyJobs(value);
-        _log.info("put-req-max-ready-requests="+value);
-        return "put-req-max-ready-requests="+value;
-    }
-
-    public final static String fh_set_max_ready_get= " Syntax: set max ready get <count>"+
-            " #will set a maximum number of get requests in the ready state";
-    public final static String hh_set_max_ready_get= " <count>";
-    public String ac_set_max_ready_get_$_1(Args args) throws Exception{
-        if(args.argc() != 1) {
-            throw new IllegalArgumentException("count is not specified");
-        }
-        int value = Integer.parseInt(args.argv(0));
-        config.setGetMaxReadyJobs(value);
-        srm.getGetRequestScheduler().setMaxReadyJobs(value);
-        _log.info("get-req-max-ready-requests="+value);
-        return "get-req-max-ready-requests="+value;
-    }
-
-    public final static String fh_set_max_ready_bring_online= " Syntax: set max ready bring online <count>"+
-            " #will set a maximum number of bring online requests in the ready state";
-    public final static String hh_set_max_ready_bring_online= " <count>";
-    public String ac_set_max_ready_bring_online_$_1(Args args) throws Exception{
-        if(args.argc() != 1) {
-            throw new IllegalArgumentException("count is not specified");
-        }
-        int value = Integer.parseInt(args.argv(0));
-        config.setBringOnlineMaxReadyJobs(value);
-        srm.getBringOnlineRequestScheduler().setMaxReadyJobs(value);
-        _log.info("bring-online-req-max-ready-requests="+value);
-        return "bring-online-req-max-ready-requests="+value;
-    }
-
-    public final static String fh_set_max_read_ls_= " Syntax: set max read ls <count>\n"+
-            " #will set a maximum number of ls requests in the ready state\n"+
-            " #\"set max read ls\" is an alias for \"set max ready ls\" preserved for compatibility ";
-    public final static String hh_set_max_read_ls= " <count>";
-    public String ac_set_read_ls_$_1(Args args) throws Exception{
-        return ac_set_max_ready_ls_$_1(args);
-    }
-
-    public final static String fh_set_max_ready_ls= " Syntax: set max ready ls <count>\n"+
-            " #will set a maximum number of ls requests in the ready state";
-    public final static String hh_set_max_ready_ls= " <count>";
-    public String ac_set_max_ready_ls_$_1(Args args) throws Exception{
-        if(args.argc() != 1) {
-            throw new IllegalArgumentException("count is not specified");
-        }
-        int value = Integer.parseInt(args.argv(0));
-        config.setLsMaxReadyJobs(value);
-        srm.getLsRequestScheduler().setMaxReadyJobs(value);
-        _log.info("ls-request-max-ready-requests="+value);
-        return "ls-request-max-ready-requests="+value;
-    }
-
-      public final static String fh_dir_creators_ls= " Syntax: dir creators ls [-l]  "+
-         "#will list all put companion waiting for the dir creation ";
-      public final static String hh_dir_creators_ls= " [-l] ";
-      public String ac_dir_creators_ls_$_0(Args args) {
-        try {
-            boolean longformat = args.hasOption("l");
-            StringBuilder sb = new StringBuilder();
-            PutCompanion.listDirectoriesWaitingForCreation(sb,longformat);
-            return sb.toString();
-         } catch(Throwable t) {
-            t.printStackTrace();
-            return t.toString();
-         }
-      }
-      public final static String fh_cancel_dir_creation= " Syntax:cancel dir creation <path>  "+
-         "#will fail companion waiting for the dir creation on <path> ";
-      public final static String hh_cancel_dir_creation= " <path>";
-      public String ac_cancel_dir_creation_$_1(Args args) {
-        try {
-            String pnfsPath = args.argv(0);
-            StringBuilder sb = new StringBuilder();
-            PutCompanion.failCreatorsForPath(pnfsPath,sb);
-            return sb.toString();
-         } catch(Throwable t) {
-            t.printStackTrace();
-            return t.toString();
-         }
-      }
-
-      public final static String hh_print_srm_counters= "# prints the counters for all srm operations";
-      public String ac_print_srm_counters_$_0(Args args) {
-            return srm.getSrmServerV1Counters().toString()+
-                    '\n'+
-                   srm.getSrmServerV2Counters().toString()+
-                   '\n'+
-                   srm.getAbstractStorageElementCounters().toString()+
-                   '\n'+
-                   srm.getSrmServerV1Gauges().toString()+
-                   '\n'+
-                   srm.getSrmServerV2Gauges().toString()+
-                   '\n'+
-                   srm.getAbstractStorageElementGauges().toString();
-      }
-
-
-    /**
-     * Starts new threads for processing TransferManagerMessage.
-     */
     public void messageArrived(final TransferManagerMessage msg)
     {
-        ThreadManager.execute(new Runnable() {
-                @Override
-                public void run() {
-                    handleTransferManagerMessage(msg);
-                }
-            });
-    }
+        Long callerId = msg.getId();
+        _log.debug("handleTransferManagerMessage for callerId="+callerId);
 
-    @Override
-    public void pinFile(SRMUser user,
-                        URI surl,
-                        String clientHost,
-                        long pinLifetime,
-                        String requestToken,
-                        PinCallbacks callbacks)
-    {
-        try {
-            PinCompanion.pinFile(((DcacheUser) user).getSubject(),
-                                 getPath(surl),
-                                 clientHost,
-                                 callbacks,
-                                 pinLifetime,
-                                 requestToken,
-                                 _isOnlinePinningEnabled,
-                                 _poolMonitor,
-                                 _pnfsStub,
-                                 _poolManagerStub,
-                                 _pinManagerStub);
-        } catch (SRMInvalidPathException e) {
-            callbacks.FileNotFound(e.getMessage());
-        }
-    }
-
-    @Override
-    public void unPinFile(SRMUser user, String fileId,
-                          UnpinCallbacks callbacks,
-                          String pinId)
-    {
-        if (PinCompanion.isFakePinId(pinId)) {
+        TransferInfo info = callerIdToHandler.get(callerId);
+        if (info == null) {
+            _log.error("TransferInfo for callerId="+callerId+"not found");
             return;
         }
 
-        UnpinCompanion.unpinFile(((DcacheUser) user).getSubject(),
-                                 new PnfsId(fileId), Long.parseLong(pinId), callbacks,_pinManagerStub);
+        if (msg instanceof TransferCompleteMessage ) {
+            info.callbacks.copyComplete();
+            _log.debug("removing TransferInfo for callerId="+callerId);
+            callerIdToHandler.remove(callerId);
+        } else if (msg instanceof TransferFailedMessage) {
+            Object error =  msg.getErrorObject();
+            if (error instanceof CacheException) {
+                error = ((CacheException) error).getMessage();
+            }
+            SRMException e;
+            switch (msg.getReturnCode()) {
+            case CacheException.PERMISSION_DENIED:
+                e = new SRMAuthorizationException(String.format("Access denied: %s", error));
+                break;
+            case CacheException.FILE_NOT_FOUND:
+                e = new SRMInvalidPathException(String.valueOf(error));
+                break;
+            case CacheException.THIRD_PARTY_TRANSFER_FAILED:
+                e = new SRMException("Transfer failed: " + error);
+                break;
+            default:
+                e = new SRMException(String.format("Transfer failed: %s [%d]",
+                                                   error, msg.getReturnCode()));
+            }
+            info.callbacks.copyFailed(e);
+
+            _log.debug("removing TransferInfo for callerId="+callerId);
+            callerIdToHandler.remove(callerId);
+        }
     }
 
     @Override
-    public void unPinFileBySrmRequestId(SRMUser user, String fileId,
-                                        UnpinCallbacks callbacks,
-                                        String requestToken)
+    public CheckedFuture<Pin, ? extends SRMException> pinFile(SRMUser user,
+                                                              URI surl,
+                                                              String clientHost,
+                                                              long pinLifetime,
+                                                              String requestToken)
     {
-        UnpinCompanion.unpinFileBySrmRequestId(((DcacheUser) user).getSubject(),
-                new PnfsId(fileId), requestToken, callbacks, _pinManagerStub);
+        try {
+            return Futures.makeChecked(PinCompanion.pinFile(((DcacheUser) user).getSubject(),
+                                                            getPath(surl),
+                                                            clientHost,
+                                                            pinLifetime,
+                                                            requestToken,
+                                                            _isOnlinePinningEnabled,
+                                                            _poolMonitor,
+                                                            _pnfsStub,
+                                                            _poolManagerStub,
+                                                            _pinManagerStub,
+                                                            _executor),
+                                       new ToSRMException());
+        } catch (SRMInvalidPathException e) {
+            return Futures.immediateFailedCheckedFuture(new SRMInvalidPathException(e.getMessage()));
+        }
     }
 
     @Override
-    public void unPinFile(SRMUser user, String fileId, UnpinCallbacks callbacks)
+    public CheckedFuture<String, ? extends SRMException> unPinFile(SRMUser user, String fileId, String pinId)
     {
-        UnpinCompanion.unpinFile(((DcacheUser) user).getSubject(),
-                                 new PnfsId(fileId), callbacks, _pinManagerStub);
+        if (PinCompanion.isFakePinId(pinId)) {
+            return Futures.immediateCheckedFuture(null);
+        }
+
+        return Futures.makeChecked(
+                UnpinCompanion.unpinFile(
+                        ((DcacheUser) user).getSubject(), new PnfsId(fileId), Long.parseLong(pinId), _pinManagerStub),
+                new ToSRMException());
     }
 
-    private String selectGetProtocol(String[] protocols)
-            throws SRMException {
-        return selectProtocolFor(protocols, srmGetNotSupportedProtocols);
-    }
-
-    private String selectPutProtocol(String[] protocols)
-            throws SRMException {
-        return selectProtocolFor(protocols, srmPutNotSupportedProtocols);
-    }
-
-    private String selectProtocolFor(String[] protocols, String[] excludes)
-            throws SRMException
+    @Override
+    public CheckedFuture<String, ? extends SRMException> unPinFileBySrmRequestId(
+            SRMUser user, String fileId, String requestToken)
     {
-        Set<String> availableProtocols = listAvailableProtocols();
-        availableProtocols.retainAll(Arrays.asList(protocols));
-        availableProtocols.removeAll(Arrays.asList(excludes));
-        for (String protocol : srmPreferredProtocols) {
-            if (availableProtocols.contains(protocol)) {
-                return protocol;
-            }
-        }
-        for (String protocol : protocols) {
-            if (availableProtocols.contains(protocol)) {
-                return protocol;
-            }
-        }
-        _log.warn("Cannot find suitable protocol. Client requested one of {}.",
-                Arrays.toString(protocols));
-        throw new SRMException("Cannot find suitable transfer protocol.");
+        return Futures.makeChecked(
+                UnpinCompanion.unpinFileBySrmRequestId(
+                        ((DcacheUser) user).getSubject(), new PnfsId(fileId), requestToken, _pinManagerStub),
+                new ToSRMException());
+    }
+
+    @Override
+    public CheckedFuture<String, ? extends SRMException> unPinFile(
+            SRMUser user, String fileId)
+    {
+        return Futures.makeChecked(
+                UnpinCompanion.unpinFile(
+                        ((DcacheUser) user).getSubject(), new PnfsId(fileId), _pinManagerStub),
+                new ToSRMException());
     }
 
     @Override
     public String[] supportedGetProtocols()
             throws SRMInternalErrorException
     {
-        Set<String> protocols = listAvailableProtocols();
-        protocols.removeAll(Arrays.asList(srmGetNotSupportedProtocols));
-        return protocols.toArray(new String[protocols.size()]);
+        return Iterables.toArray(filter(getLoginBrokerInfos().keySet(),
+                                        not(in(asList(srmGetNotSupportedProtocols)))), String.class);
     }
 
     @Override
     public String[] supportedPutProtocols()
             throws SRMInternalErrorException
     {
-        Set<String> protocols = listAvailableProtocols();
-        protocols.removeAll(Arrays.asList(srmPutNotSupportedProtocols));
-        return protocols.toArray(new String[protocols.size()]);
+        return Iterables.toArray(filter(getLoginBrokerInfos().keySet(),
+                                        not(in(asList(srmPutNotSupportedProtocols)))), String.class);
     }
 
     @Override
-    public URI getGetTurl(SRMUser user, URI surl, String[] protocols)
+    public URI getGetTurl(SRMUser user, URI surl, String[] protocols, URI previousTurl)
         throws SRMException
     {
         FsPath path = getPath(surl);
-        String protocol = selectGetProtocol(protocols);
-        return getTurl(path, protocol, user);
-    }
-
-    @Override
-    public URI getGetTurl(SRMUser user, URI surl, URI previous_turl)
-        throws SRMException
-    {
-        FsPath actualFilePath = getPath(surl);
-        String host = previous_turl.getHost();
-        int port = previous_turl.getPort();
-        return getTurl(actualFilePath, previous_turl.getScheme(), host, port, user);
-    }
-
-    @Override
-    public URI getPutTurl(SRMUser user, URI surl, String[] protocols)
-        throws SRMException
-    {
-        FsPath path = getPath(surl);
-        String protocol = selectPutProtocol(protocols);
-        return getTurl(path, protocol, user);
-    }
-
-    @Override
-    public URI getPutTurl(SRMUser user, URI surl, URI previous_turl)
-        throws SRMException
-    {
-        FsPath path = getPath(surl);
-        String host = previous_turl.getHost();
-        int port = previous_turl.getPort();
-        return getTurl(path, previous_turl.getScheme(), host, port, user);
-    }
-
-    private URI getTurl(FsPath path,String protocol,SRMUser user)
-        throws SRMException
-    {
-        if (protocol == null) {
-            throw new IllegalArgumentException("protocol is null");
+        if (!verifyUserPathIsRootSubpath(path, user)) {
+            throw new SRMAuthorizationException(String.format("Access denied: Path [%s] is outside user's root [%s]",
+                                                              path, ((DcacheUser) user).getRoot()));
         }
-        String hostPort = selectHost(protocol);
-        int index = hostPort.indexOf(':');
-        if (index > -1) {
-            String host = hostPort.substring(0, index);
-            int port = Integer.parseInt(hostPort.substring(index + 1));
-            return getTurl(path, protocol, host, port, user);
-        } else {
-            return getTurl(path, protocol, hostPort, 0, user);
-        }
+        return getTurl((DcacheUser) user, path, protocols, srmGetNotSupportedProtocols, previousTurl);
+    }
+
+    @Override
+    public URI getPutTurl(SRMUser user, String fileId, String[] protocols, URI previousTurl)
+        throws SRMException
+    {
+        return getTurl((DcacheUser) user, new FsPath(fileId), protocols, srmPutNotSupportedProtocols, previousTurl);
     }
 
     private static boolean isHostAndPortNeeded(String protocol) {
         return !protocol.equalsIgnoreCase("file");
     }
 
-    private URI getTurl(FsPath path, String protocol,
-                        String host, int port, SRMUser user)
-        throws SRMException
+    private URI getTurl(DcacheUser user, FsPath path, String[] includes, String[] excludes, URI previousTurl)
+            throws SRMAuthorizationException, SRMInternalErrorException, SRMNotSupportedException
     {
-        if (path == null) {
-            throw new IllegalArgumentException("path is null");
+        LoginBrokerInfo door = null;
+        if (previousTurl != null && previousTurl.getScheme().equals("dcap")) {
+            door = findDoor(previousTurl);
         }
-        if (protocol == null) {
-            throw new IllegalArgumentException("protocol is null");
+        if (door == null) {
+            door = selectDoor(includes, excludes, user, path);
         }
-        if (host == null) {
-            throw new IllegalArgumentException("host is null");
-        }
-        String transfer_path = getTurlPath(path,protocol,user);
-        if (transfer_path == null) {
-            throw new SRMException("cannot get transfer path");
-        }
-        try {
-            if (port == 0) {
-                port = -1;
-            }
-            URI turl = isHostAndPortNeeded(protocol) ?
-                    new URI(protocol, null, host, port, transfer_path, null, null):
-                    new URI(protocol, null, transfer_path, null);
 
-            _log.debug("getTurl() returns turl={}", turl);
+        FsPath root = (door.getRoot() != null) ? new FsPath(door.getRoot()) : user.getRoot();
+        String transferPath = stripRootPath(root, path);
+
+        try {
+            String protocol = door.getProtocolFamily();
+            if (protocol.equals("gsiftp") || protocol.equals("ftp") || protocol.equals("gkftp")) {
+                /* According to RFC 1738 an FTP URL is relative to the FTP server's initial
+                 * working directory, which in dCache is the user's home directory.
+                 *
+                 * The spec compliant way to make it absolute would be to prefix it with %2F,
+                 * but our own SRM client doesn't handle that correctly. globus-url-copy (and
+                 * tools build on top of the same code base) interpret the URL as an absolute URL -
+                 * that's not spec compliant either. See
+                 *
+                 *     https://bugzilla.mcs.anl.gov/globus/show_bug.cgi?id=3413
+                 *
+                 * for a report on this issue.
+                 *
+                 * Adding an extra slash at the front works with both clients, although
+                 * globus-url-copy sends a pathname with a double slash to the FTP door.
+                 * Although undefined in RFC 3659, the double slash sequence isn't illegal
+                 * and our FTP door collapses it to a single slash.
+                 *
+                 * Neither globus-url-copy nor srmcp interpret the extra slash according to
+                 * the spec and this code will not work with a client that is spec compliant.
+                 */
+                transferPath = "/" + transferPath;
+            }
+            URI turl = isHostAndPortNeeded(protocol)
+                    ? new URI(protocol, null, resolve(door), door.getPort(), transferPath, null, null)
+                    : new URI(protocol, null, transferPath, null);
+            _log.debug("getTurl() returns {}", turl);
             return turl;
         } catch (URISyntaxException e) {
             throw new SRMInternalErrorException(e.getMessage());
@@ -1186,110 +701,40 @@ public final class Storage
                                          l.size()));
     }
 
-    private String getTurlPath(FsPath path, String protocol, SRMUser user)
-        throws SRMException
-    {
-        FsPath userRoot = new FsPath();
-        if (user != null) {
-            userRoot = ((DcacheUser) user).getRoot();
-        }
-
-        if (!verifyUserPathIsRootSubpath(path, user)) {
-            throw new SRMAuthorizationException(String.format("Access denied: Path [%s] is outside user's root [%s]", path, userRoot));
-        }
-
-        String transferPath;
-        switch (protocol) {
-        case "gsiftp":
-            transferPath = stripRootPath(userRoot, path);
-            break;
-        case "http":
-        case "https":
-            transferPath = stripRootPath(_httpRootPath, path);
-            break;
-        case "root":
-            transferPath = stripRootPath(_xrootdRootPath, path);
-            break;
-        default:
-            transferPath = path.toString();
-            break;
-        }
-
-        _log.debug("getTurlPath(path=" + path + ",protocol=" + protocol +
-            ",user=" + user + ") = " + transferPath);
-
-        return transferPath;
-    }
-
-    // These hashtables are used as a caching mechanizm for the login
-    // broker infos. Here we asume that no protocol called "null" is
-    // going to be ever used.
-    private final Map<String,LoginBrokerInfo[]> latestLoginBrokerInfos =
-        new HashMap<>();
-    private final Map<String,Long> latestLoginBrokerInfosTimes =
-        new HashMap<>();
-    private long LOGINBROKERINFO_VALIDITYSPAN = 30 * 1000;
-    private static final int MAX_LOGIN_BROKER_RETRIES = 5;
-
-    private LoginBrokerInfo[] getLoginBrokerInfos(String protocol)
+    private Multimap<String,LoginBrokerInfo> getLoginBrokerInfos()
         throws SRMInternalErrorException
     {
-        String key = (protocol == null) ? "null" : protocol;
-
-        synchronized (latestLoginBrokerInfosTimes) {
-            Long timestamp = latestLoginBrokerInfosTimes.get(key);
-            if (timestamp !=null) {
-                long age = System.currentTimeMillis() - timestamp;
-                if (age < LOGINBROKERINFO_VALIDITYSPAN) {
-                    LoginBrokerInfo[] infos = latestLoginBrokerInfos.get(key);
-                    if (infos != null) {
-                        return infos;
-                    }
-                }
-            }
-        }
-
-        String brokerMessage = "ls -binary";
-        if (protocol != null) {
-            brokerMessage = brokerMessage + " -protocol=" + protocol;
-        }
-
-        String error;
         try {
-            int retry = 0;
-            do {
-                _log.debug("getLoginBrokerInfos sending \"{}\" to LoginBroker", brokerMessage);
-                try {
-                    LoginBrokerInfo[] infos =
-                        _loginBrokerStub.sendAndWait(brokerMessage,
-                                                     LoginBrokerInfo[].class);
-                    synchronized (latestLoginBrokerInfosTimes) {
-                        latestLoginBrokerInfosTimes.put(key, System.currentTimeMillis());
-                        latestLoginBrokerInfos.put(key, infos);
-                    }
-                    return infos;
-                } catch (TimeoutCacheException e) {
-                    error = "LoginBroker is unavailable";
-                } catch (CacheException e) {
-                    error = e.getMessage();
-                }
-                Thread.sleep(5 * 1000);
-            } while (++retry < MAX_LOGIN_BROKER_RETRIES);
-        } catch (InterruptedException e) {
-            throw new SRMInternalErrorException("Request was interrupted", e);
+            return loginBrokerInfo.get();
+        } catch (RuntimeException e) {
+            throw new SRMInternalErrorException(e.getMessage(), e);
         }
-
-        throw new SRMInternalErrorException(error);
     }
 
-    public Set<String> listAvailableProtocols()
+    private Multimap<String, LoginBrokerInfo> getLoginBrokerInfos(final Collection<String> includes,
+                                                                  final Collection<String> excludes,
+                                                                  final DcacheUser user,
+                                                                  final FsPath path)
             throws SRMInternalErrorException
     {
-        Set<String> protocols = new HashSet<>();
-        for (LoginBrokerInfo info: getLoginBrokerInfos(null)) {
-            protocols.add(info.getProtocolFamily());
-        }
-        return protocols;
+        return Multimaps.filterEntries(
+                getLoginBrokerInfos(),
+                new Predicate<Map.Entry<String, LoginBrokerInfo>>()
+                {
+                    @Override
+                    public boolean apply(Map.Entry<String, LoginBrokerInfo> entry)
+                    {
+                        String protocol = entry.getKey();
+                        if (!includes.contains(protocol) || excludes.contains(protocol)) {
+                            return false;
+                        }
+                        FsPath root =
+                                (entry.getValue().getRoot() != null)
+                                        ? new FsPath(entry.getValue().getRoot())
+                                        : user.getRoot();
+                        return path.startsWith(root);
+                    }
+                });
     }
 
     @Override
@@ -1299,7 +744,7 @@ public final class Storage
         String protocol = url.getScheme();
         String host = url.getHost();
         int port = url.getPort();
-        for (LoginBrokerInfo info: getLoginBrokerInfos(protocol)) {
+        for (LoginBrokerInfo info: getLoginBrokerInfos().get(protocol)) {
             if (info.getHost().equals(host) && info.getPort() == port) {
                 return true;
             }
@@ -1307,30 +752,51 @@ public final class Storage
         return false;
     }
 
-
-    private String selectHost(String protocol)
-            throws SRMInternalErrorException
+    private Collection<LoginBrokerInfo> selectDoors(String[] includes, String[] excludes, DcacheUser user, FsPath path)
+            throws SRMInternalErrorException, SRMNotSupportedException
     {
-        _log.trace("selectHost({})", protocol);
-        LoginBrokerInfo[] loginBrokerInfos = getLoginBrokerInfos(protocol);
-        Arrays.sort(loginBrokerInfos, LOAD_ORDER);
-        int len = loginBrokerInfos.length;
-        if (len <=0){
-            return null;
+        Multimap<String, LoginBrokerInfo> doors =
+                getLoginBrokerInfos(asList(includes), asList(excludes), user, path);
+        for (String protocol : srmPreferredProtocols) {
+            if (doors.containsKey(protocol)) {
+                return doors.get(protocol);
+            }
         }
-        int selected_indx;
-        synchronized (rand) {
-            selected_indx = rand.nextInt(Math.min(len, numDoorInRanSelection));
+        for (String protocol : includes) {
+            if (doors.containsKey(protocol)) {
+                return doors.get(protocol);
+            }
         }
-        String doorHostPort = lbiToDoor(loginBrokerInfos[selected_indx]);
-
-        _log.trace("selectHost returns {}", doorHostPort);
-        return doorHostPort;
+        _log.warn("Cannot find suitable protocol. Client requested one of {}.",
+                  Arrays.toString(includes));
+        throw new SRMNotSupportedException("Cannot find suitable transfer protocol.");
     }
 
-    private final Random rand = new Random();
+    private LoginBrokerInfo selectDoor(String[] includes, String[] excludes, DcacheUser user, FsPath path)
+            throws SRMInternalErrorException, SRMNotSupportedException
+    {
+        Collection<LoginBrokerInfo> doors =
+                selectDoors(includes, excludes, user, path);
+        List<LoginBrokerInfo> loginBrokerInfos = LOAD_ORDER.leastOf(doors, numDoorInRanSelection);
+        int index = rand.nextInt(Math.min(loginBrokerInfos.size(), numDoorInRanSelection));
+        LoginBrokerInfo door = loginBrokerInfos.get(index);
+        _log.trace("selectDoor returns {}", door);
+        return door;
+    }
 
-    private int numDoorInRanSelection = 3;
+    private LoginBrokerInfo findDoor(URI uri)
+            throws SRMInternalErrorException
+    {
+        String protocol = uri.getScheme();
+        String host = uri.getHost();
+        int port = uri.getPort();
+        for (LoginBrokerInfo door : getLoginBrokerInfos().get(protocol)) {
+            if (resolve(door).equals(host) && door.getPort() == port) {
+                return door;
+            }
+        }
+        return null;
+    }
 
     private final LoadingCache<String,String> doorToHostnameCache =
             CacheBuilder.newBuilder()
@@ -1349,23 +815,22 @@ public final class Storage
                         }
                     });
 
-    private String lbiToDoor(LoginBrokerInfo lbi) throws SRMInternalErrorException
+    private String resolve(LoginBrokerInfo door) throws SRMInternalErrorException
     {
         try {
-            String resolvedHost = doorToHostnameCache.get(lbi.getHost());
-            return resolvedHost +":"+ lbi.getPort();
+            return doorToHostnameCache.get(door.getHost());
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             throw new SRMInternalErrorException("Failed to resolve door: " + cause, cause);
         }
     }
 
-    private static final Comparator<LoginBrokerInfo> LOAD_ORDER =
-        new Comparator<LoginBrokerInfo>() {
+    private static final Ordering<LoginBrokerInfo> LOAD_ORDER =
+        new Ordering<LoginBrokerInfo>() {
             @Override
             public int compare(LoginBrokerInfo info1, LoginBrokerInfo info2)
             {
-                return (int)Math.signum(info1.getLoad() - info2.getLoad());
+                return Double.compare(info1.getLoad(), info2.getLoad());
             }
         };
 
@@ -1437,22 +902,185 @@ public final class Storage
         }
 
     @Override
-    public void prepareToPut(SRMUser user,
-                             URI surl,
-                             PrepareToPutCallbacks callbacks,
-                             boolean overwrite)
+    public CheckedFuture<String, ? extends SRMException> prepareToPut(
+            final SRMUser user, URI surl,
+            Long size, String accessLatency, String retentionPolicy, String spaceToken,
+            boolean overwrite)
+    {
+        Subject subject = ((DcacheUser) user).getSubject();
+        try {
+            FsPath fullPath = getPath(surl);
+
+            if (!verifyUserPathIsRootSubpath(fullPath, user)) {
+                return immediateFailedCheckedFuture(new SRMAuthorizationException(
+                        String.format("Access denied: Path [%s] is outside user's root [%s]",
+                                      fullPath, ((DcacheUser) user).getRoot())));
+            }
+
+            if (spaceToken != null) {
+                if (!_isSpaceManagerEnabled) {
+                    return immediateFailedCheckedFuture(
+                            new SRMNotSupportedException(SPACEMANAGER_DISABLED_MESSAGE));
+                }
+
+                /* This check could and maybe should be done on the SRM side of AbstractStorageElement:
+                 * The targetSpaceToken is the same for all SURLs in an srmPrepareToPut request, and the
+                 * SRM_EXCEED_ALLOCATION should also be returned if the entire srmPrepareToPut request
+                 * is larger than available space in the reservation - that's a check we cannot possibly
+                 * to on an individual SURL.
+                 */
+                try {
+                    Optional<Space> optionalSpace = spaces.get(spaceToken);
+                    if (!optionalSpace.isPresent()) {
+                        return immediateFailedCheckedFuture(new SRMInvalidRequestException(
+                                "The space token " + spaceToken + " does not refer to an existing known space reservation."));
+                    }
+                    Space space = optionalSpace.get();
+                    if (space.getExpirationTime() != null && space.getExpirationTime() < System.currentTimeMillis()) {
+                        return immediateFailedCheckedFuture(new SRMSpaceLifetimeExpiredException(
+                                "Space reservation associated with the space token " + spaceToken + " is expired."));
+                    }
+                    if (size != null && space.getAvailableSpaceInBytes() < size) {
+                        return immediateFailedCheckedFuture(new SRMExceedAllocationException(
+                                "Space associated with the space token " + spaceToken + " is not enough to hold SURL."));
+                    }
+                } catch (ExecutionException e) {
+                    return immediateFailedCheckedFuture(new SRMException(
+                            "Failure while querying space reservation: " + e.getCause().getMessage()));
+                }
+            }
+
+            int uid = Ints.checkedCast(Subjects.getUid(subject));
+            int gid = Ints.checkedCast(Subjects.getPrimaryGid(subject));
+            AccessLatency al = (accessLatency != null) ? AccessLatency.valueOf(accessLatency) : null;
+            RetentionPolicy rp = (retentionPolicy != null) ? RetentionPolicy.valueOf(retentionPolicy) : null;
+            EnumSet<CreateOption> options = EnumSet.noneOf(CreateOption.class);
+            if (overwrite) {
+                options.add(CreateOption.OVERWRITE_EXISTING);
+            }
+            if (config.isRecursiveDirectoryCreation()) {
+                options.add(CreateOption.CREATE_PARENTS);
+            }
+            PnfsCreateUploadPath msg =
+                    new PnfsCreateUploadPath(subject, fullPath,
+                                             uid, gid, NameSpaceProvider.DEFAULT, size,
+                                             al, rp, spaceToken,
+                                             options);
+
+            final SettableFuture<String> future = SettableFuture.create();
+            CellStub.addCallback(_pnfsStub.send(msg),
+                                 new AbstractMessageCallback<PnfsCreateUploadPath>()
+                                 {
+                                     @Override
+                                     public void success(PnfsCreateUploadPath message)
+                                     {
+                                         future.set(message.getUploadPath().toString());
+                                     }
+
+                                     @Override
+                                     public void failure(int rc, Object error)
+                                     {
+                                         String msg = Objects.toString(error, "");
+                                         switch (rc) {
+                                         case CacheException.PERMISSION_DENIED:
+                                             future.setException(new SRMAuthorizationException(msg));
+                                             break;
+                                         case CacheException.FILE_EXISTS:
+                                             future.setException(new SRMDuplicationException(msg));
+                                             break;
+                                         case CacheException.FILE_NOT_FOUND:
+                                             future.setException(new SRMInvalidPathException(msg));
+                                             break;
+                                         case CacheException.TIMEOUT:
+                                         default:
+                                             future.setException(new SRMInternalErrorException(msg));
+                                             break;
+                                         }
+                                     }
+                                 }, MoreExecutors.sameThreadExecutor());
+            return Futures.makeChecked(future, new ToSRMException());
+        } catch (SRMInvalidPathException e) {
+            return immediateFailedCheckedFuture(e);
+        }
+    }
+
+    @Override
+    public void putDone(SRMUser user, String localTransferPath, URI surl, boolean overwrite) throws SRMException
     {
         try {
+            Subject subject = ((DcacheUser) user).getSubject();
+            FsPath fullPath = getPath(surl);
+            EnumSet<CreateOption> options = EnumSet.noneOf(CreateOption.class);
+            if (overwrite) {
+                options.add(CreateOption.OVERWRITE_EXISTING);
+            }
+            PnfsCommitUpload msg =
+                    new PnfsCommitUpload(subject,
+                                         new FsPath(localTransferPath),
+                                         fullPath,
+                                         options,
+                                         EnumSet.of(SIZE, STORAGEINFO));
+            msg = _pnfsStub.sendAndWait(msg);
+
+            DoorRequestInfoMessage infoMsg =
+                    new DoorRequestInfoMessage(getCellAddress().toString());
+            infoMsg.setSubject(subject);
+            infoMsg.setPath(fullPath.toString());
+            infoMsg.setTransaction(CDC.getSession());
+            infoMsg.setPnfsId(msg.getPnfsId());
+            infoMsg.setResult(0, "");
+            infoMsg.setFileSize(msg.getFileAttributes().getSize());
+            infoMsg.setStorageInfo(msg.getFileAttributes().getStorageInfo());
+            Origin origin = Subjects.getOrigin(subject);
+            if (origin != null) {
+                infoMsg.setClient(origin.getAddress().getHostAddress());
+            }
+            _billingStub.notify(infoMsg);
+        } catch (FileNotFoundCacheException e) {
+            throw new SRMInvalidPathException(e.getMessage(), e);
+        } catch (PermissionDeniedCacheException e) {
+            throw new SRMAuthorizationException("Permission denied.", e);
+        } catch (FileExistsCacheException e) {
+            throw new SRMDuplicationException(surl + " exists.", e);
+        } catch (CacheException e) {
+            throw new SRMInternalErrorException(e.getMessage(), e);
+        } catch (InterruptedException e) {
+            throw new SRMInternalErrorException("Operation interrupted", e);
+        } catch (NoRouteToCellException e) {
+            _log.error(e.getMessage());
+        }
+    }
+
+    @Override
+    public void abortPut(SRMUser user, String localTransferPath, URI surl, String reason) throws SRMException
+    {
+        try {
+            Subject subject = ((DcacheUser) user).getSubject();
             FsPath actualPnfsPath = getPath(surl);
-            PutCompanion.PrepareToPutFile(((DcacheUser) user).getSubject(),
-                                          permissionHandler,
-                                          actualPnfsPath.toString(),
-                                          callbacks,
-                                          _pnfsStub,
-                                          config.isRecursiveDirectoryCreation(),
-                                          overwrite);
-        } catch (SRMInvalidPathException e) {
-            callbacks.InvalidPathError(e.getMessage());
+            PnfsCancelUpload msg =
+                    new PnfsCancelUpload(subject, new FsPath(localTransferPath), actualPnfsPath);
+            _pnfsStub.sendAndWait(msg);
+
+            DoorRequestInfoMessage infoMsg =
+                    new DoorRequestInfoMessage(getCellAddress().toString());
+            infoMsg.setSubject(subject);
+            infoMsg.setPath(actualPnfsPath.toString());
+            infoMsg.setTransaction(CDC.getSession());
+            infoMsg.setPnfsId(msg.getPnfsId());
+            infoMsg.setResult(CacheException.DEFAULT_ERROR_CODE, reason);
+            Origin origin = Subjects.getOrigin(subject);
+            if (origin != null) {
+                infoMsg.setClient(origin.getAddress().getHostAddress());
+            }
+            _billingStub.notify(infoMsg);
+        } catch (PermissionDeniedCacheException e) {
+            throw new SRMAuthorizationException("Permission denied.", e);
+        } catch (CacheException e) {
+            throw new SRMInternalErrorException(e.getMessage(), e);
+        } catch (InterruptedException e) {
+            throw new SRMInternalErrorException("Operation interrupted", e);
+        } catch (NoRouteToCellException e) {
+            _log.error(e.getMessage());
         }
     }
 
@@ -1486,14 +1114,25 @@ public final class Storage
         }
     }
 
-    @Override @Nonnull
-    public FileMetaData getFileMetaData(SRMUser user, URI surl, boolean read)
-        throws SRMException
+    @Nonnull
+    @Override
+    public FileMetaData getFileMetaData(SRMUser user, URI surl, boolean checkReadPermissions)
+            throws SRMException
     {
-        _log.debug("getFileMetaData(" + surl + ")");
-        FsPath path = getPath(surl);
+        return getFileMetaData((DcacheUser) user, checkReadPermissions, getPath(surl));
+    }
+
+    @Nonnull
+    @Override
+    public FileMetaData getFileMetaData(SRMUser user, URI surl, String fileId) throws SRMException
+    {
+        return getFileMetaData((DcacheUser) user, false, new FsPath(fileId));
+    }
+
+    private FileMetaData getFileMetaData(DcacheUser user, boolean checkReadPermissions, FsPath path) throws SRMException
+    {
         PnfsHandler handler =
-            new PnfsHandler(_pnfs, ((DcacheUser) user).getSubject());
+            new PnfsHandler(_pnfs, user.getSubject());
         try {
             /* Fetch file attributes.
              */
@@ -1503,7 +1142,7 @@ public final class Storage
             requestedAttributes.addAll(PoolMonitorV5.getRequiredAttributesForFileLocality());
 
             Set<AccessMask> accessMask =
-                read
+                checkReadPermissions
                 ? EnumSet.of(AccessMask.READ_DATA)
                 : EnumSet.noneOf(AccessMask.class);
 
@@ -1568,11 +1207,11 @@ public final class Storage
     }
 
     @Override
-    public void localCopy(SRMUser user, URI fromSurl, URI toSurl)
+    public void localCopy(SRMUser user, URI fromSurl, String localTransferPath)
         throws SRMException
     {
         FsPath actualFromFilePath = getPath(fromSurl);
-        FsPath actualToFilePath = getPath(toSurl);
+        FsPath actualToFilePath = new FsPath(localTransferPath);
         long id = getNextMessageID();
         _log.debug("localCopy for user " + user +
                    "from actualFromFilePath to actualToFilePath");
@@ -1597,12 +1236,6 @@ public final class Storage
         } catch (InterruptedException e) {
             throw new SRMException("Request to CopyManager was interrupted", e);
         }
-    }
-
-    @Override
-    public void prepareToPutInReservedSpace(SRMUser user, String path, long size,
-        long spaceReservationToken, PrepareToPutInSpaceCallbacks callbacks) {
-        throw new UnsupportedOperationException("NotImplementedException");
     }
 
     @Override
@@ -2019,54 +1652,20 @@ public final class Storage
 
     }
 
-    /**
-     * @param user User ID
-     * @param remoteTURL
-     * @param surl
-     * @param remoteUser
-     * @param remoteCredentialId
-     * @param callbacks
-     * @throws SRMException
-     * @return copy handler id
-     */
     @Override
     public String getFromRemoteTURL(SRMUser user,
                                     URI remoteTURL,
-                                    URI surl,
-                                    SRMUser remoteUser,
-                                    Long remoteCredentialId,
-                                    String spaceReservationId,
-                                    long size,
-                                    CopyCallbacks callbacks)
-        throws SRMException
-    {
-        FsPath path = getPath(surl);
-        _log.debug(" getFromRemoteTURL from "+remoteTURL+" to " +path);
-        return performRemoteTransfer(user,remoteTURL,path,true,
-                remoteUser,
-                remoteCredentialId,
-                spaceReservationId,
-                size,
-                callbacks);
-
-    }
-
-    @Override
-    public String getFromRemoteTURL(SRMUser user,
-                                    URI remoteTURL,
-                                    URI surl,
+                                    String fileId,
                                     SRMUser remoteUser,
                                     Long remoteCredentialId,
                                     CopyCallbacks callbacks)
         throws SRMException
     {
-        FsPath path = getPath(surl);
-        _log.debug(" getFromRemoteTURL from "+remoteTURL+" to " +path);
+        FsPath path = new FsPath(fileId);
+        _log.debug("getFromRemoteTURL from {} to {}", remoteTURL, path);
         return performRemoteTransfer(user,remoteTURL,path,true,
                 remoteUser,
                 remoteCredentialId,
-                null,
-                null,
                 callbacks);
 
     }
@@ -2095,8 +1694,6 @@ public final class Storage
         return performRemoteTransfer(user,remoteTURL,path,false,
                 remoteUser,
                 remoteCredentialId,
-                null,
-                null,
                 callbacks);
 
 
@@ -2110,9 +1707,8 @@ public final class Storage
             TransferInfo info = callerIdToHandler.get(callerId);
             if (info != null) {
                 CancelTransferMessage cancel =
-                    new
-                    CancelTransferMessage(info.transferId, callerId);
-                sendMessage(new CellMessage(info.cellPath,cancel));
+                    new CancelTransferMessage(info.transferId, callerId);
+                _transferManagerStub.notify(cancel);
             }
         } catch (NoRouteToCellException e) {
             _log.error("Failed to kill remote transfer: " + e.getMessage());
@@ -2154,8 +1750,6 @@ public final class Storage
                                          boolean store,
                                          SRMUser remoteUser,
                                          Long remoteCredentialId,
-                                         String spaceReservationId,
-                                         Long size,
                                          CopyCallbacks callbacks)
         throws SRMException
     {
@@ -2188,10 +1782,10 @@ public final class Storage
                 RemoteGsiftpTransferProtocolInfo gsiftpProtocolInfo =
                         new RemoteGsiftpTransferProtocolInfo(
                                 "RemoteGsiftpTransfer",
-				1, 1,
+                1, 1,
                                 new InetSocketAddress(remoteTURL.getHost(), port),
-				remoteTURL.toString(),
-				getCellName(),
+                remoteTURL.toString(),
+                getCellName(),
                                 getCellDomainName(),
                                 config.getBuffer_size(),
                                 config.getTcp_buffer_size(),
@@ -2214,36 +1808,21 @@ public final class Storage
             throw new SRMException("not implemented");
         }
 
-        RemoteTransferManagerMessage request;
-        if (store && spaceReservationId != null && size != null) {
-            // space reservation was performed for a file of known size
-            request =
-                new RemoteTransferManagerMessage(remoteTURL,
-                                                 actualFilePath,
-                                                 store,
-                                                 remoteCredentialId,
-                                                 spaceReservationId,
-                                                 config.isSpace_reservation_strict(),
-                                                 size,
-                                                 protocolInfo);
-        } else {
-            request =
+        RemoteTransferManagerMessage request =
                 new RemoteTransferManagerMessage(remoteTURL,
                                                  actualFilePath,
                                                  store,
                                                  remoteCredentialId,
                                                  protocolInfo);
-        }
         request.setSubject(subject);
         try {
             RemoteTransferManagerMessage reply =
                 _transferManagerStub.sendAndWait(request);
             long id = reply.getId();
             _log.debug("received first RemoteGsiftpTransferManagerMessage "
-                       + "reply from transfer manager, id ="+id);
+                               + "reply from transfer manager, id =" + id);
             TransferInfo info =
-                new TransferInfo(id, callbacks,
-                                 _transferManagerStub.getDestinationPath());
+                new TransferInfo(id, callbacks);
             _log.debug("storing info for callerId = {}", id);
             callerIdToHandler.put(id, info);
             return String.valueOf(id);
@@ -2265,125 +1844,11 @@ public final class Storage
     {
         final long transferId;
         final CopyCallbacks callbacks;
-        final CellPath cellPath;
 
-        public TransferInfo(long transferId,
-                            CopyCallbacks callbacks,
-                            CellPath cellPath)
+        public TransferInfo(long transferId, CopyCallbacks callbacks)
         {
             this.transferId = transferId;
             this.callbacks = callbacks;
-            this.cellPath = cellPath;
-        }
-    }
-
-    private void handleTransferManagerMessage(TransferManagerMessage message) {
-        Long callerId = message.getId();
-        _log.debug("handleTransferManagerMessage for callerId="+callerId);
-
-        TransferInfo info = callerIdToHandler.get(callerId);
-        if (info == null) {
-            _log.error("TransferInfo for callerId="+callerId+"not found");
-            return;
-        }
-
-        if (message instanceof TransferCompleteMessage ) {
-            info.callbacks.copyComplete(null);
-            _log.debug("removing TransferInfo for callerId="+callerId);
-            callerIdToHandler.remove(callerId);
-        } else if (message instanceof TransferFailedMessage) {
-            Object error =  message.getErrorObject();
-            if (error instanceof CacheException) {
-                error = ((CacheException) error).getMessage();
-            }
-            SRMException e;
-            switch (message.getReturnCode()) {
-            case CacheException.PERMISSION_DENIED:
-                e = new SRMAuthorizationException(String.format("Access denied: %s", error));
-                break;
-            case CacheException.FILE_NOT_FOUND:
-                e = new SRMInvalidPathException(String.valueOf(error));
-                break;
-            default:
-                e = new SRMException(String.format("Transfer failed: %s [%d]",
-                                                   error, message.getReturnCode()));
-            }
-            info.callbacks.copyFailed(e);
-
-            _log.debug("removing TransferInfo for callerId="+callerId);
-            callerIdToHandler.remove(callerId);
-        }
-    }
-
-
-    private volatile StorageElementInfo storageElementInfo =
-        new StorageElementInfo();
-
-    @Override
-    public StorageElementInfo getStorageElementInfo(SRMUser user)
-    {
-        return storageElementInfo;
-    }
-
-    private StorageElementInfo getStorageElementInfo()
-    {
-        return storageElementInfo;
-    }
-
-    private void updateStorageElementInfo()
-        throws CacheException, InterruptedException
-    {
-        _poolMonitor =
-            _poolManagerStub.sendAndWait(new PoolManagerGetPoolMonitor()).getPoolMonitor();
-
-        String[] pools =
-            _poolMonitor.getPoolSelectionUnit().getActivePools();
-        if (pools.length == 0) {
-            _log.debug("Pool manager provided empty list of pools; assuming pool manager was restarted");
-            return;
-        }
-
-        CostModule cm = _poolMonitor.getCostModule();
-        StorageElementInfo info = new StorageElementInfo();
-        for (String pool: pools) {
-            PoolCostInfo.PoolSpaceInfo poolInfo =
-                cm.getPoolCostInfo(pool).getSpaceInfo();
-
-            if (poolInfo != null) {
-                /* FIXME: Removable space is added to both used and
-                 * available. The logic is copied from the old code.
-                 * It also seems like we don't account for CACHED +
-                 * STICKY files.
-                 */
-                info.availableSpace += poolInfo.getFreeSpace();
-                info.availableSpace += poolInfo.getRemovableSpace();
-                info.totalSpace += poolInfo.getTotalSpace();
-                info.usedSpace += poolInfo.getPreciousSpace();
-                info.usedSpace += poolInfo.getRemovableSpace();
-            }
-        }
-
-        storageElementInfo = info;
-    }
-
-    /**
-     * we use run method to update the storage info structure periodically
-     */
-    @Override
-    public void run()
-    {
-        try {
-            while (true) {
-                try {
-                    updateStorageElementInfo();
-                } catch (CacheException e) {
-                    _log.error("Pool monitor update failed: {} [{}]",
-                               e.getMessage(), e.getRc());
-                }
-                Thread.sleep(config.getStorage_info_update_period());
-            }
-        } catch (InterruptedException e) {
-            _log.debug("Storage info update thread shut down");
         }
     }
 
@@ -2571,25 +2036,24 @@ public final class Storage
             throws InterruptedException
         {
             _available.acquire();
-            _spaceManagerStub.send(
-                 new GetFileSpaceTokensMessage(attributes.getPnfsId()),
-                 GetFileSpaceTokensMessage.class,
-                 new AbstractMessageCallback<GetFileSpaceTokensMessage>() {
-                      @Override
-                      public void success(GetFileSpaceTokensMessage message)
-                      {
-                           _available.release();
-                           fmd.spaceTokens = message.getSpaceTokens();
-                      }
+            CellStub.addCallback(_spaceManagerStub.send(new GetFileSpaceTokensMessage(attributes.getPnfsId())),
+                                 new AbstractMessageCallback<GetFileSpaceTokensMessage>()
+                                 {
+                                     @Override
+                                     public void success(GetFileSpaceTokensMessage message)
+                                     {
+                                         _available.release();
+                                         fmd.spaceTokens = message.getSpaceTokens();
+                                     }
 
-                      @Override
-                      public void failure(int rc, Object error)
-                      {
-                           _available.release();
-                           _log.error("Locality lookup failed: {} [{}]",
-                                      error, rc);
-                      }
-                 });
+                                     @Override
+                                     public void failure(int rc, Object error)
+                                     {
+                                         _available.release();
+                                         _log.error("Locality lookup failed: {} [{}]",
+                                                    error, rc);
+                                     }
+                                 }, MoreExecutors.sameThreadExecutor());
         }
     }
 
@@ -2618,61 +2082,16 @@ public final class Storage
         if (_isSpaceManagerEnabled) {
             SrmReleaseSpaceCompanion.releaseSpace(((DcacheUser) user).getSubject(),
                     spaceToken, releaseSizeInBytes, callbacks, _spaceManagerStub);
+            spaces.invalidate(spaceToken);
         } else {
             callbacks.failed(SPACEMANAGER_DISABLED_MESSAGE);
-        }
-    }
-
-    @Override
-    public void srmMarkSpaceAsBeingUsed(SRMUser user,
-                                        String spaceToken,
-                                        URI surl,
-                                        long sizeInBytes,
-                                        long useLifetime,
-                                        boolean overwrite,
-                                        SrmUseSpaceCallbacks callbacks)
-    {
-        if (_isSpaceManagerEnabled) {
-            try {
-                SrmMarkSpaceAsBeingUsedCompanion.markSpace(((DcacheUser) user).getSubject(),
-                        Long.parseLong(spaceToken), getPath(surl).toString(),
-                        sizeInBytes, useLifetime, overwrite, callbacks,
-                        _spaceManagerStub);
-            } catch (SRMInvalidPathException e) {
-                callbacks.SrmUseSpaceFailed("Invalid path: " + e.getMessage());
-            } catch (NumberFormatException ignored){
-                callbacks.SrmUseSpaceFailed("invalid space token=" + spaceToken);
-            }
-        } else {
-            callbacks.SrmUseSpaceFailed(SPACEMANAGER_DISABLED_MESSAGE);
-        }
-    }
-
-    @Override
-    public void srmUnmarkSpaceAsBeingUsed(SRMUser user,
-                                          String spaceToken,
-                                          URI surl,
-                                          SrmCancelUseOfSpaceCallbacks callbacks)
-    {
-        if (_isSpaceManagerEnabled) {
-            try {
-                SrmUnmarkSpaceAsBeingUsedCompanion.unmarkSpace(((DcacheUser) user).getSubject(),
-                        Long.parseLong(spaceToken), getPath(surl).toString(),
-                        callbacks, _spaceManagerStub);
-            } catch (SRMInvalidPathException e) {
-                callbacks.CancelUseOfSpaceFailed("Invalid path: " + e.getMessage());
-            } catch (NumberFormatException ignored){
-                callbacks.CancelUseOfSpaceFailed("invalid space token="+spaceToken);
-            }
-        } else {
-            callbacks.CancelUseOfSpaceFailed(SPACEMANAGER_DISABLED_MESSAGE);
         }
     }
 
     private void guardSpaceManagerEnabled() throws SRMException
     {
         if (!_isSpaceManagerEnabled) {
-            throw new SRMException(SPACEMANAGER_DISABLED_MESSAGE);
+            throw new SRMNotSupportedException(SPACEMANAGER_DISABLED_MESSAGE);
         }
     }
 
@@ -2688,19 +2107,7 @@ public final class Storage
         throws SRMException
     {
         guardSpaceManagerEnabled();
-        long[] tokens = new long[spaceTokens.length];
-        for (int i = 0; i < spaceTokens.length; ++i) {
-            try {
-                tokens[i] = Long.parseLong(spaceTokens[i]);
-            } catch (NumberFormatException e) {
-                /* Space manager enumerates spaces starting at 0, so -1 will cause it to return
-                 * a null value below, which in turn will be reported as SRM_INVALID_REQUEST.
-                 */
-                tokens[i] = -1;
-            }
-        }
-
-        GetSpaceMetaData getSpaces = new GetSpaceMetaData(tokens);
+        GetSpaceMetaData getSpaces = new GetSpaceMetaData(spaceTokens);
         try {
             getSpaces = _spaceManagerStub.sendAndWait(getSpaces);
         } catch (TimeoutCacheException e) {
@@ -2809,33 +2216,6 @@ public final class Storage
         return tokenStrings;
     }
 
-    @Override @Nonnull
-    public String[] srmGetRequestTokens(SRMUser user,String description)
-        throws SRMException {
-        try {
-            Set<Long> tokens = srm.getBringOnlineRequestIds(user,
-                    description);
-            tokens.addAll(srm.getGetRequestIds(user,
-                    description));
-            tokens.addAll(srm.getPutRequestIds(user,
-                    description));
-            tokens.addAll(srm.getCopyRequestIds(user,
-                    description));
-            tokens.addAll(srm.getLsRequestIds(user,
-                    description));
-            Long[] tokenLongs = tokens
-                    .toArray(new Long[tokens.size()]);
-            String[] tokenStrings = new String[tokenLongs.length];
-            for (int i = 0; i < tokenLongs.length; ++i) {
-                tokenStrings[i] = tokenLongs[i].toString();
-            }
-            return tokenStrings;
-        } catch (DataAccessException e) {
-            _log.error("srmGetRequestTokens failed: {}", e.getMessage());
-            throw new SRMInternalErrorException("Database failure", e);
-        }
-    }
-
     /**
      * Ensures that the user has write privileges for a path. That
      * includes checking lookup privileges. The file must exist for
@@ -2909,6 +2289,7 @@ public final class Storage
             ExtendLifetime extendLifetime =
                 new ExtendLifetime(longSpaceToken, newReservationLifetime);
             extendLifetime = _spaceManagerStub.sendAndWait(extendLifetime);
+            spaces.invalidate(spaceToken);
             return extendLifetime.getNewLifetime();
         } catch (NumberFormatException e){
             throw new SRMException("Cannot parse space token: " +
@@ -2966,23 +2347,6 @@ public final class Storage
     @Override
     public String getStorageBackendVersion() {
         return VERSION.getVersion();
-    }
-
-    @Override
-    public boolean exists(SRMUser user, URI surl)
-            throws SRMInternalErrorException, SRMInvalidPathException
-    {
-        FsPath path = getPath(surl);
-        try {
-            return _pnfs.getPnfsIdByPath(path.toString()) != null;
-        } catch (FileNotFoundCacheException e) {
-            return false;
-        } catch (NotInTrashCacheException e) {
-            return false;
-        } catch (CacheException e) {
-            _log.error("Failed to find file by path : " + e.getMessage());
-            throw new SRMInternalErrorException("Failed to check existence of file: " + e.getMessage());
-        }
     }
 
     /**
@@ -3043,6 +2407,58 @@ public final class Storage
             return path;
         } catch (UnknownHostException e) {
             throw new SRMInvalidPathException(e.getMessage());
+        }
+    }
+
+    private class LoginBrokerInfoSupplier implements Supplier<Multimap<String,LoginBrokerInfo>>
+    {
+        private static final int MAX_LOGIN_BROKER_RETRIES = 5;
+
+        @Override
+        public Multimap<String,LoginBrokerInfo> get()
+        {
+            String brokerMessage = "ls -binary";
+            String error;
+            try {
+                int retry = 0;
+                do {
+                    try {
+                        LoginBrokerInfo[] doors =
+                                _loginBrokerStub.sendAndWait(brokerMessage, LoginBrokerInfo[].class);
+                        Multimap<String,LoginBrokerInfo> map = ArrayListMultimap.create();
+                        for (LoginBrokerInfo door : doors) {
+                            map.put(door.getProtocolFamily(), door);
+                        }
+                        return map;
+                    } catch (TimeoutCacheException e) {
+                        error = "LoginBroker is unavailable";
+                    } catch (CacheException e) {
+                        error = e.getMessage();
+                    }
+                    Thread.sleep(5 * 1000);
+                } while (++retry < MAX_LOGIN_BROKER_RETRIES);
+            } catch (InterruptedException e) {
+                throw new RuntimeException("Request was interrupted", e);
+            }
+            throw new RuntimeException(error);
+        }
+    }
+
+    private static class ToSRMException implements Function<Exception, SRMException>
+    {
+        @Override
+        public SRMException apply(Exception from)
+        {
+            if (from instanceof InterruptedException) {
+                return new SRMInternalErrorException("SRM is shutting down.", from);
+            }
+            if (from instanceof CancellationException) {
+                return new SRMAbortedException("Request was aborted.", from);
+            }
+            if (from.getCause() instanceof SRMException) {
+                return (SRMException) from.getCause();
+            }
+            return new SRMInternalErrorException(from);
         }
     }
 }

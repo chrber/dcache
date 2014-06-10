@@ -1,8 +1,7 @@
 package org.dcache.srm.request.sql;
 
 import com.google.common.base.Throwables;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.springframework.dao.DataAccessException;
 
 import java.io.IOException;
@@ -10,8 +9,11 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -30,29 +32,22 @@ import org.dcache.srm.request.ReserveSpaceRequest;
 import org.dcache.srm.scheduler.AsynchronousSaveJobStorage;
 import org.dcache.srm.scheduler.CanonicalizingJobStorage;
 import org.dcache.srm.scheduler.FinalStateOnlyJobStorageDecorator;
-import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.scheduler.JobStorage;
 import org.dcache.srm.scheduler.JobStorageFactory;
 import org.dcache.srm.scheduler.NoopJobStorage;
-import org.dcache.srm.scheduler.Scheduler;
-import org.dcache.srm.scheduler.SchedulerFactory;
+import org.dcache.srm.scheduler.SchedulerContainer;
 import org.dcache.srm.scheduler.SharedMemoryCacheJobStorage;
-import org.dcache.srm.scheduler.State;
 import org.dcache.srm.util.Configuration;
 
-/**
- *
- * @author timur
- */
-public class DatabaseJobStorageFactory extends JobStorageFactory{
-    private static final Logger logger =
-            LoggerFactory.getLogger(DatabaseJobStorageFactory.class);
+public class DatabaseJobStorageFactory extends JobStorageFactory
+{
     private final Map<Class<? extends Job>, JobStorage<?>> jobStorageMap =
         new LinkedHashMap<>(); // JobStorage initialization order is significant to ensure file
                                // requests are cached before container requests are loaded
     private final Map<Class<? extends Job>, JobStorage<?>> unmodifiableJobStorageMap =
             Collections.unmodifiableMap(jobStorageMap);
     private final ExecutorService executor;
+    private final ScheduledExecutorService scheduledExecutor;
 
     private <J extends Job> void add(Configuration.DatabaseParameters config,
                      Class<J> entityClass,
@@ -66,7 +61,9 @@ public class DatabaseJobStorageFactory extends JobStorageFactory{
     {
         JobStorage<J> js;
         if (config.isDatabaseEnabled()) {
-            js = storageClass.getConstructor(Configuration.DatabaseParameters.class).newInstance(config);
+            js = storageClass
+                    .getConstructor(Configuration.DatabaseParameters.class, ScheduledExecutorService.class)
+                    .newInstance(config, scheduledExecutor);
             js = new AsynchronousSaveJobStorage<>(js, executor);
             if (config.getStoreCompletedRequestsOnly()) {
                 js = new FinalStateOnlyJobStorageDecorator<>(js);
@@ -82,7 +79,10 @@ public class DatabaseJobStorageFactory extends JobStorageFactory{
         executor = new ThreadPoolExecutor(
                 config.getJdbcExecutionThreadNum(), config.getJdbcExecutionThreadNum(),
                 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<Runnable>(config.getMaxQueuedJdbcTasksNum()));
+                new LinkedBlockingQueue<Runnable>(config.getMaxQueuedJdbcTasksNum()),
+                new ThreadFactoryBuilder().setNameFormat("srm-db-save-%d").build());
+        scheduledExecutor =
+                Executors.newSingleThreadScheduledExecutor(new ThreadFactoryBuilder().setNameFormat("srm-db-gc-%d").build());
         try {
             add(config.getDatabaseParametersForBringOnline(),
                 BringOnlineFileRequest.class,
@@ -130,21 +130,31 @@ public class DatabaseJobStorageFactory extends JobStorageFactory{
         }
     }
 
-    public void init() throws IllegalStateTransition, InterruptedException, DataAccessException
+    public void init() throws DataAccessException
     {
         for (JobStorage<?> jobStorage : jobStorageMap.values()) {
             jobStorage.init();
         }
+    }
 
-        SchedulerFactory schedulerFactory = SchedulerFactory.getSchedulerFactory();
-        for (Map.Entry<Class<? extends Job>, JobStorage<?>> entry: jobStorageMap.entrySet()) {
-            try {
-                Scheduler scheduler = schedulerFactory.getScheduler(entry.getKey());
-                for (Job job: entry.getValue().getJobs(null, State.PENDING)) {
-                    scheduler.schedule(job);
-                }
-            } catch (UnsupportedOperationException ignored) {
+    public void restoreJobsOnSrmStart(SchedulerContainer schedulers)
+    {
+        for (JobStorage<?> storage: jobStorageMap.values()) {
+            Set<? extends Job> jobs = storage.getActiveJobs();
+            schedulers.restoreJobsOnSrmStart(jobs);
+        }
+    }
+
+    public void shutdown()
+    {
+        scheduledExecutor.shutdown();
+        executor.shutdown();
+        try {
+            if (scheduledExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                executor.awaitTermination(3, TimeUnit.SECONDS);
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

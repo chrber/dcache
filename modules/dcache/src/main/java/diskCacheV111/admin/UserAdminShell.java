@@ -1,7 +1,7 @@
-// $Id: UserAdminShell.java,v 1.16 2006-08-22 00:11:09 timur Exp $
-
 package diskCacheV111.admin ;
 
+import com.google.common.base.Strings;
+import com.google.common.base.Throwables;
 import jline.Completor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.concurrent.ExecutionException;
 
 import diskCacheV111.pools.PoolV2Mode;
 import diskCacheV111.util.CacheException;
@@ -43,15 +44,11 @@ import diskCacheV111.vehicles.PoolSetStickyMessage;
 import diskCacheV111.vehicles.QuotaMgrCheckQuotaMessage;
 
 import dmg.cells.nucleus.CellEndpoint;
-import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellMessage;
-import dmg.cells.nucleus.CellMessageAnswerable;
-import dmg.cells.nucleus.CellNucleus;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.SerializationException;
 import dmg.util.AclException;
-import dmg.util.Args;
 import dmg.util.AuthorizedString;
 import dmg.util.CommandException;
 import dmg.util.CommandExitException;
@@ -59,13 +56,15 @@ import dmg.util.CommandInterpreter;
 import dmg.util.CommandPanicException;
 import dmg.util.CommandSyntaxException;
 import dmg.util.CommandThrowableException;
-import dmg.util.RequestTimeOutException;
 
 import org.dcache.cells.CellStub;
 import org.dcache.namespace.FileAttribute;
+import org.dcache.util.Args;
 import org.dcache.util.CacheExceptionFactory;
 import org.dcache.vehicles.FileAttributes;
 import org.dcache.vehicles.PnfsGetFileAttributes;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
   *
@@ -84,9 +83,12 @@ public class UserAdminShell
     private static final int CD_PROBE_MESSAGE_TIMEOUT_MS = 1000;
 
     private final CellEndpoint cellEndPoint ;
+    private final CellStub _acmStub;
+    private final CellStub _poolManager;
+    private final CellStub _pnfsManager;
+    private final CellStub _cellStub;
     private String      _user;
     private String      _authUser;
-    private final CellPath    _path     = new CellPath("acm");
     private long        _timeout  = 10000 ;
     private boolean     _fullException;
     private final String      _instance ;
@@ -262,6 +264,11 @@ public class UserAdminShell
        _user     = user ;
        _authUser = user ;
 
+        _acmStub = new CellStub(cellEndpoint, new CellPath("acm"));
+        _poolManager = new CellStub(cellEndpoint, new CellPath("PoolManager"));
+        _pnfsManager = new CellStub(cellEndpoint, new CellPath("PnfsManager"), 30000, MILLISECONDS);
+        _cellStub = new CellStub(cellEndpoint);
+
        String prompt = args.getOpt("dCacheInstance");
        if( prompt == null || !prompt.equals("hide") ){
            if( prompt == null || prompt.length() == 0 ){
@@ -275,58 +282,9 @@ public class UserAdminShell
        }else{
            _instance = null;
        }
+       addCommandListener(new HelpCommands());
     }
-    public UserAdminShell(String user, final CellNucleus nucleus, final Args args) {
-        this(user, new CellEndpoint()   {
 
-            @Override
-            public void sendMessage(CellMessage envelope) throws SerializationException, NoRouteToCellException {
-                nucleus.sendMessage(envelope);
-            }
-
-            @Override
-            public void sendMessage(CellMessage envelope, CellMessageAnswerable callback, long timeout) throws SerializationException {
-                nucleus.sendMessage(envelope, true, true, callback, timeout);
-            }
-
-            @Override
-            public CellMessage sendAndWait(CellMessage envelope, long timeout) throws SerializationException, NoRouteToCellException, InterruptedException {
-                return nucleus.sendAndWait(envelope, true, true, timeout);
-            }
-            private long timeUntil(long time) {
-                return time - System.currentTimeMillis();
-            }
-            private final static long RETRY_PERIOD = 30000; // 30 seconds
-            @Override
-            public CellMessage sendAndWaitToPermanent(CellMessage envelope, long timeout) throws SerializationException, InterruptedException {
-
-                long deadline = System.currentTimeMillis() + timeout;
-                while (true) {
-                    try {
-                        return sendAndWait(envelope, timeUntil(deadline));
-                    } catch (NoRouteToCellException e) {
-                        Thread.sleep(Math.min(timeUntil(deadline), RETRY_PERIOD));
-                    }
-                }
-            }
-
-            @Override
-            public CellInfo getCellInfo() {
-                return nucleus.getCellInfo();
-            }
-
-            @Override
-            public Map<String, Object> getDomainContext() {
-                return nucleus.getDomainContext();
-            }
-
-            @Override
-            public Args getArgs() {
-                return args;
-            }
-        },
-        args);
-    }
     protected String getUser(){ return _user ; }
     public void checkPermission( String aclName )
            throws AclException {
@@ -337,34 +295,23 @@ public class UserAdminShell
          request[2] = "check-permission" ;
          request[3] = getUser() ;
          request[4] = aclName ;
-         CellMessage reply;
+         Object[] r;
          try{
-            reply = cellEndPoint.sendAndWait(
-                         new CellMessage( _path , request ) ,
-                         _timeout    ) ;
-            if( reply == null ) {
-                throw new
-                        AclException("Request timed out (" + _path + ")");
-            }
-         }catch(Exception ee ){
-            throw new
-            AclException( "Problem : "+ee.getMessage() ) ;
+            r = _acmStub.sendAndWait(request, Object[].class, _timeout);
+         } catch (TimeoutCacheException e) {
+             throw new AclException(e.getMessage());
+         } catch (CacheException | InterruptedException e) {
+             throw new AclException("Problem: " + e.getMessage());
          }
-         Object r = reply.getMessageObject() ;
-         if( ( r == null                    ) ||
-             ( ! ( r instanceof Object [] ) ) ||
-             (  ((Object [])r).length < 6   ) ||
-             ( ! ( ((Object [])r)[5] instanceof Boolean ) ) ) {
-             throw new
-                     AclException("Protocol violation 4456");
+         if (r.length < 6 | !(r[5] instanceof Boolean)) {
+             throw new AclException("Protocol violation 4456");
          }
 
-         if( ! ((Boolean) ((Object[]) r)[5]) ) {
-             throw new
-                     AclException(getUser(), aclName);
+         if (!((Boolean) r[5])) {
+             throw new AclException(getUser(), aclName);
          }
-
     }
+
     public String getHello(){
       return "\n    dCache Admin (VII) (user="+getUser()+")\n\n" ;
     }
@@ -558,10 +505,9 @@ public class UserAdminShell
 
     public static final String hh_repinfoof = "<pnfsId> | <globalPath>";
 
-    public String ac_repinfoof_$_1(Args args) throws CacheException,
-                                                     SerializationException, NoRouteToCellException,
-            InterruptedException, RequestTimeOutException {
-
+    public String ac_repinfoof_$_1(Args args)
+            throws CacheException, SerializationException, NoRouteToCellException, InterruptedException, CommandException
+    {
         StringBuilder sb = new StringBuilder();
         String fileIdentifier = args.argv(0);
 
@@ -583,10 +529,8 @@ public class UserAdminShell
     }
 
     private FileAttributes getFileLocations(String fileIdentifier)
-            throws CacheException,
-                   SerializationException, NoRouteToCellException,
-            InterruptedException, RequestTimeOutException {
-
+            throws CacheException, SerializationException, NoRouteToCellException, InterruptedException, CommandException
+    {
         Set<FileAttribute> request = EnumSet.of(FileAttribute.LOCATIONS, FileAttribute.PNFSID);
         PnfsGetFileAttributes msg;
 
@@ -634,7 +578,7 @@ public class UserAdminShell
                StringBuffer sb )
             throws Exception {
 
-       if( ( target == null ) || ( target.equals("") ) ) {
+       if (Strings.isNullOrEmpty(target)) {
            target = "*";
        }
 
@@ -980,50 +924,20 @@ public class UserAdminShell
            PnfsGetFileAttributes fileAttributesMsg =
                new PnfsGetFileAttributes(pnfsId, PoolMgrReplicateFileMsg.getRequiredAttributes());
 
-           CellMessage  msg = new CellMessage( new CellPath("PnfsManager") , fileAttributesMsg ) ;
-            msg = cellEndPoint.sendAndWait( msg , 30000L )  ;
-           if( msg == null ) {
-               throw new
-                       Exception("Get storageinfo timed out");
-           }
-
-           fileAttributesMsg = (PnfsGetFileAttributes) msg.getMessageObject();
-
-           if (fileAttributesMsg.getReturnCode() != 0) {
-               throw new
-                       IllegalArgumentException("getFileAttributes returned " + fileAttributesMsg
-                       .getReturnCode());
-           }
+           fileAttributesMsg = _pnfsManager.sendAndWait(fileAttributesMsg);
 
            DCapProtocolInfo pinfo =
             new DCapProtocolInfo("DCap",0,0, new InetSocketAddress("localhost",0));
 
-
-          PoolMgrReplicateFileMsg select =
-              new PoolMgrReplicateFileMsg(fileAttributesMsg.getFileAttributes(), pinfo);
-
-          msg = new CellMessage( new CellPath("PoolManager"),select ) ;
 
           String timeoutString = args.getOpt("timeout");
           long timeout = timeoutString != null ?
                          Long.parseLong(timeoutString)*1000L :
                          60000L ;
 
-                    msg = cellEndPoint.sendAndWait( msg , timeout ) ;
-
-          select = (PoolMgrReplicateFileMsg)msg.getMessageObject() ;
-          if( select == null ) {
-              throw new
-                      Exception("p2p request timed out");
-          }
-
-          if( select.getReturnCode() != 0 ) {
-              throw new
-                      Exception("Problem return from 'p2p' : (" + select
-                      .getReturnCode() +
-                      ") " + select.getErrorObject());
-          }
-
+           PoolMgrReplicateFileMsg select =
+                   new PoolMgrReplicateFileMsg(fileAttributesMsg.getFileAttributes(), pinfo);
+           select = _poolManager.sendAndWait(select, timeout);
           return "p2p -> "+select.getPoolName() ;
        }
     }
@@ -1358,13 +1272,13 @@ public class UserAdminShell
        }
     }
     private void checkCellExists( CellPath remoteCell) {
-        CellMessage checkMsg = new CellMessage( remoteCell , ADMIN_COMMAND_NOOP);
         try {
-            cellEndPoint.sendAndWait( checkMsg, CD_PROBE_MESSAGE_TIMEOUT_MS);
-        } catch (SerializationException e) {
-            throw new RuntimeException("Failed to serialise test message", e);
-        } catch (NoRouteToCellException e) {
-            throw new IllegalArgumentException("Cannot cd to this cell as it doesn't exist");
+            _cellStub.sendAndWait(remoteCell, ADMIN_COMMAND_NOOP, Object.class, CD_PROBE_MESSAGE_TIMEOUT_MS);
+        } catch (TimeoutCacheException e) {
+            throw new IllegalArgumentException("Cannot cd to this cell as it doesn't exist.");
+        } catch (CacheException e) {
+            // Some other failure, but apparently the cell exists
+            _log.info("Cell probe failed: {}", e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -1459,56 +1373,56 @@ public class UserAdminShell
 
     }
     private Object sendObject(String cellPath, Serializable object)
-            throws SerializationException, NoRouteToCellException,
-            InterruptedException, RequestTimeOutException {
-
+            throws NoRouteToCellException, InterruptedException, CacheException, CommandException
+    {
         return sendObject(new CellPath(cellPath), object);
     }
 
     private Object sendObject(CellPath cellPath, Serializable object)
-            throws SerializationException, NoRouteToCellException,
-            InterruptedException, RequestTimeOutException
-   {
-
-        CellMessage res =
-            cellEndPoint.sendAndWait(
-                   new CellMessage( cellPath , object ) ,
-              _timeout ) ;
-        if (res == null) {
-            throw new RequestTimeOutException(_timeout, cellPath);
-        }
-          Object obj =  res.getMessageObject() ;
-          if( ( obj instanceof Throwable ) && _fullException ){
-              CharArrayWriter ca = new CharArrayWriter() ;
-              ((Throwable)obj).printStackTrace(new PrintWriter(ca)) ;
-              return ca.toString();
-          }
-          return obj ;
-
+            throws NoRouteToCellException, InterruptedException, CacheException, CommandException
+    {
+       try {
+           return _cellStub.send(cellPath, object, Object.class).get();
+       } catch (ExecutionException e) {
+           Throwable cause = e.getCause();
+           if (_fullException) {
+               return getStackTrace(cause);
+           }
+           Throwables.propagateIfInstanceOf(cause, NoRouteToCellException.class);
+           Throwables.propagateIfInstanceOf(cause, CacheException.class);
+           Throwables.propagateIfInstanceOf(cause, CommandException.class);
+           throw new CacheException(CacheException.UNEXPECTED_SYSTEM_EXCEPTION, cause.getMessage(), cause);
+       }
     }
+
     protected Object sendCommand( String destination , String command )
             throws InterruptedException, NoRouteToCellException, TimeoutCacheException
     {
 
-        CellPath cellPath = new CellPath(destination);
-        CellMessage res =
-            cellEndPoint.sendAndWait(
-                   new CellMessage( cellPath ,
-                                    new AuthorizedString( _user ,
-                                                          command)
-                                  ) ,
-              _timeout ) ;
-          if( res == null ) {
-              throw new TimeoutCacheException("Request timed out");
-          }
-          Object obj =  res.getMessageObject() ;
-          if( ( obj instanceof Throwable ) && _fullException ){
-              CharArrayWriter ca = new CharArrayWriter() ;
-              ((Throwable)obj).printStackTrace(new PrintWriter(ca)) ;
-              return ca.toString();
-          }
-          return obj ;
+        try {
+            Object obj = _cellStub.sendAndWait(new CellPath(destination),
+                                               new AuthorizedString( _user , command),
+                                               Object.class,
+                                               _timeout);
+            if (obj instanceof Throwable && _fullException) {
+                return getStackTrace((Throwable) obj);
+            }
+            return obj ;
+        } catch (TimeoutCacheException e) {
+            throw new TimeoutCacheException("Request timed out");
+        } catch (CacheException e) {
+            if (_fullException) {
+                return getStackTrace(e);
+            }
+            return e;
+        }
+    }
 
+    private Object getStackTrace(Throwable obj)
+    {
+        CharArrayWriter ca = new CharArrayWriter();
+        obj.printStackTrace(new PrintWriter(ca));
+        return ca.toString();
     }
 
     public Object executeCommand( String destination , Object str )

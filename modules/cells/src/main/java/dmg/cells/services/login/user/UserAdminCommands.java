@@ -7,13 +7,13 @@ import java.util.NoSuchElementException;
 import java.util.StringTokenizer;
 import java.util.Vector;
 
-import dmg.util.Args;
+import org.dcache.util.Args;
+
 import dmg.util.Authorizable;
 import dmg.util.CommandSyntaxException;
-import dmg.util.Interpretable;
 
-public class UserAdminCommands implements  Interpretable {
-
+public class UserAdminCommands
+{
    private AclDb            _aclDb;
    private UserRelationable _userDb;
    private UserMetaDb       _userMetaDb;

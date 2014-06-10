@@ -16,7 +16,7 @@
  */
 package org.dcache.chimera;
 
-import com.jolbox.bonecp.BoneCPDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +30,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
 
@@ -53,6 +54,13 @@ import static org.dcache.commons.util.SqlHelper.tryToClose;
  * @Threadsafe
  */
 public class JdbcFs implements FileSystemProvider {
+    /**
+     * common error message for unimplemented
+     */
+    private static final String NOT_IMPL =
+                    "this operation is unsupported for this "
+                                    + "file system; please install a dCache-aware "
+                                    + "implementation of the file system interface";
 
     /**
      * logger
@@ -224,12 +232,16 @@ public class JdbcFs implements FileSystemProvider {
             dbConnection.commit();
 
         } catch (SQLException se) {
-            _log.error("createLink ", se);
             try {
                 dbConnection.rollback();
             } catch (SQLException e) {
                 _log.error("createLink rollback ", e);
             }
+            String sqlState = se.getSQLState();
+            if (_sqlDriver.isDuplicatedKeyError(sqlState)) {
+                throw new FileExistsChimeraFsException();
+            }
+            _log.error("createLink ", se);
             throw new IOHimeraFsException(se.getMessage());
         } finally {
             tryToClose(dbConnection);
@@ -278,6 +290,12 @@ public class JdbcFs implements FileSystemProvider {
             } catch (SQLException e1) {
                 _log.error("create hlink rollback ", e);
             }
+
+            String sqlState = e.getSQLState();
+            if(_sqlDriver.isDuplicatedKeyError(sqlState)) {
+                throw new FileExistsChimeraFsException();
+            }
+            throw new IOHimeraFsException(e.getMessage());
         } finally {
             tryToClose(dbConnection);
         }
@@ -335,7 +353,11 @@ public class JdbcFs implements FileSystemProvider {
                 }
 
                 if (name.startsWith(".(pset)(") || name.startsWith(".(fset)(")) {
-                    throw new ChimeraFsException("Not supported");
+                    /**
+                     * This is not 100% correct, as we throw exist even if
+                     * someone tries to set attribute for a file which does not exist.
+                     */
+                    throw new FileExistsChimeraFsException(name);
                 }
 
                 if (name.startsWith(".(use)(") && (cmd.length == 3)) {
@@ -412,7 +434,7 @@ public class JdbcFs implements FileSystemProvider {
                     throw new FileNotFoundHimeraFsException("parent=" + parent.toString());
                 }
 
-                if ((parentStat.getMode() & UnixPermission.S_IFDIR) != UnixPermission.S_IFDIR) {
+                if ((parentStat.getMode() & UnixPermission.F_TYPE) != UnixPermission.S_IFDIR) {
                     throw new NotDirChimeraException(parent);
                 }
 
@@ -809,6 +831,57 @@ public class JdbcFs implements FileSystemProvider {
             _sqlDriver.copyTags(dbConnection, parent, inode);
             dbConnection.commit();
 
+        } catch (SQLException se) {
+
+            try {
+                dbConnection.rollback();
+            } catch (SQLException e) {
+                _log.error("mkdir", se);
+            }
+
+            // according to SQL-92 standard, class-code 23 is
+            // Constraint Violation, in our case
+            // same pool for the same file,
+            // which is OK
+            if (se.getSQLState().startsWith("23")) {
+                throw new FileExistsChimeraFsException(name);
+            }
+            _log.error("mkdir", se);
+            throw new ChimeraFsException(se.getMessage());
+        } finally {
+            tryToClose(dbConnection);
+        }
+
+        return inode;
+    }
+
+    @Override
+    public FsInode mkdir(FsInode parent, String name, int owner, int group, int mode, Map<String,byte[]> tags) throws ChimeraFsException
+    {
+        checkNameLength(name);
+
+        Connection dbConnection;
+        try {
+            // get from pool
+            dbConnection = _dbConnectionsPool.getConnection();
+        } catch (SQLException e) {
+            throw new BackEndErrorHimeraFsException(e.getMessage());
+        }
+
+        FsInode inode = null;
+
+        try {
+
+            // read/write only
+            dbConnection.setAutoCommit(false);
+
+            if ((parent.statCache().getMode() & UnixPermission.S_ISGID) != 0) {
+                group = parent.statCache().getGid();
+                mode |= UnixPermission.S_ISGID;
+            }
+
+            inode = _sqlDriver.mkdir(dbConnection, parent, name, owner, group, mode, tags);
+            dbConnection.commit();
         } catch (SQLException se) {
 
             try {
@@ -1747,14 +1820,13 @@ public class JdbcFs implements FileSystemProvider {
             throw new BackEndErrorHimeraFsException(e.getMessage());
         }
 
-        boolean rc = false;
         try {
 
             // read/write only
             dbConnection.setAutoCommit(false);
 
             Stat destStat = _sqlDriver.stat(dbConnection, destDir);
-            if ((destStat.getMode() & UnixPermission.S_IFDIR) == 0) {
+            if ((destStat.getMode() & UnixPermission.F_TYPE) != UnixPermission.S_IFDIR) {
                 throw new NotDirChimeraException();
             }
 
@@ -1770,7 +1842,7 @@ public class JdbcFs implements FileSystemProvider {
                 if (destInode.equals(srcInode)) {
                    // according to POSIX, we are done
                    dbConnection.commit();
-                   return true;
+                   return false;
                 }
 
                /*
@@ -1796,7 +1868,6 @@ public class JdbcFs implements FileSystemProvider {
             }
 
             dbConnection.commit();
-            rc = true;
         } catch (SQLException e) {
             _log.error("move:", e);
             try {
@@ -1809,7 +1880,7 @@ public class JdbcFs implements FileSystemProvider {
             tryToClose(dbConnection);
         }
 
-        return rc;
+        return true;
     }
 
     /////////////////////////////////////////////////////////////////////
@@ -1836,6 +1907,36 @@ public class JdbcFs implements FileSystemProvider {
             dbConnection.setAutoCommit(true);
 
             locations = _sqlDriver.getInodeLocations(dbConnection, inode, type);
+
+        } catch (SQLException se) {
+            _log.error("getInodeLocations", se);
+            throw new IOHimeraFsException(se.getMessage());
+        } finally {
+            tryToClose(dbConnection);
+        }
+
+        return locations;
+    }
+
+    @Override
+    public List<StorageLocatable> getInodeLocations(FsInode inode) throws ChimeraFsException {
+
+        Connection dbConnection;
+        try {
+            // get from pool
+            dbConnection = _dbConnectionsPool.getConnection();
+        } catch (SQLException e) {
+            throw new BackEndErrorHimeraFsException(e.getMessage());
+        }
+
+        List<StorageLocatable> locations = null;
+
+        try {
+
+            // read/write only
+            dbConnection.setAutoCommit(true);
+
+            locations = _sqlDriver.getInodeLocations(dbConnection, inode);
 
         } catch (SQLException se) {
             _log.error("getInodeLocations", se);
@@ -1947,6 +2048,28 @@ public class JdbcFs implements FileSystemProvider {
         }
 
         return list;
+    }
+
+    @Override
+    public Map<String, byte[]> getAllTags(FsInode inode) throws ChimeraFsException {
+        Connection dbConnection;
+        try {
+            // get from pool
+            dbConnection = _dbConnectionsPool.getConnection();
+        } catch (SQLException e) {
+            throw new BackEndErrorHimeraFsException(e.getMessage());
+        }
+
+        try {
+            // read only
+            dbConnection.setAutoCommit(true);
+            return _sqlDriver.getAllTags(dbConnection, inode);
+        } catch (SQLException | IOException e) {
+            _log.error("getAllTags", e);
+            throw new IOHimeraFsException(e.getMessage(), e);
+        } finally {
+            tryToClose(dbConnection);
+        }
     }
 
     @Override
@@ -2510,32 +2633,6 @@ public class JdbcFs implements FileSystemProvider {
     }
 
     @Override
-    public String getInodeChecksum(FsInode inode, int type) throws ChimeraFsException {
-        String checkSum = null;
-        Connection dbConnection;
-        try {
-            // get from pool
-            dbConnection = _dbConnectionsPool.getConnection();
-        } catch (SQLException e) {
-            throw new BackEndErrorHimeraFsException(e.getMessage());
-        }
-
-        try {
-            dbConnection.setAutoCommit(true);
-
-            checkSum = _sqlDriver.getInodeChecksum(dbConnection, inode, type);
-
-        } catch (SQLException e) {
-            _log.error("getInodeChecksum", e);
-            throw new IOHimeraFsException(e.getMessage());
-        } finally {
-            tryToClose(dbConnection);
-        }
-
-        return checkSum;
-    }
-
-    @Override
     public Set<Checksum> getInodeChecksums(FsInode inode) throws ChimeraFsException {
         Set<Checksum> checkSums = new HashSet<>();
         Connection dbConnection;
@@ -2705,8 +2802,8 @@ public class JdbcFs implements FileSystemProvider {
      */
     @Override
     public void close() throws IOException {
-        if (_dbConnectionsPool instanceof BoneCPDataSource) {
-            ((BoneCPDataSource) _dbConnectionsPool).close();
+        if (_dbConnectionsPool instanceof HikariDataSource) {
+            ((HikariDataSource) _dbConnectionsPool).shutdown();
         } else if (_dbConnectionsPool instanceof Closeable) {
             ((Closeable) _dbConnectionsPool).close();
         }
@@ -2969,8 +3066,24 @@ public class JdbcFs implements FileSystemProvider {
 
     @Override
     public String getFileLocality(FsInode_PLOC node) throws ChimeraFsException {
-        throw new ChimeraFsException("this operation is unsupported for this "
-                        + "file system; please install a dCache-aware "
-                        + "implementation of the file system interface");
+        throw new ChimeraFsException(NOT_IMPL);
+    }
+
+    /**
+     * To maintain the abstraction level, we relegate the actual
+     * callout to the subclass.
+     */
+    @Override
+    public void pin(String pnfsid, long lifetime) throws ChimeraFsException {
+       throw new ChimeraFsException(NOT_IMPL);
+    }
+
+   /**
+    * To maintain the abstraction level, we relegate the actual
+    * callout to the subclass.
+    */
+    @Override
+    public void unpin(String pnfsid) throws ChimeraFsException {
+       throw new ChimeraFsException(NOT_IMPL);
     }
 }

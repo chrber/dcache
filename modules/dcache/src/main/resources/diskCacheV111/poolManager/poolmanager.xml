@@ -7,12 +7,8 @@
            http://www.springframework.org/schema/context
            http://www.springframework.org/schema/context/spring-context.xsd">
 
+  <context:property-placeholder/>
   <context:annotation-config/>
-
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
 
   <bean id="poolManager" class="diskCacheV111.poolManager.PoolManagerV5"
         init-method="init">
@@ -22,7 +18,7 @@
     <property name="poolMonitor" ref="poolMonitor"/>
     <property name="requestContainer" ref="rc"/>
     <property name="broadcastStub" ref="broadcast-stub"/>
-    <property name="quotaManager" value="${poolmanager.plugins.quota-manager}"/>
+    <property name="quotaManager" value="#{ '${poolmanager.plugins.quota-manager}' == 'none' ? null : quota-stub }"/>
     <property name="pnfsHandler" ref="pnfs"/>
   </bean>
 
@@ -54,6 +50,12 @@
     <property name="partitionManager" ref="pm"/>
   </bean>
 
+  <bean id="quota-stub" class="org.dcache.cells.CellStub">
+      <property name="destination" value="${poolmanager.plugins.quota-manager}"/>
+      <property name="timeout" value="20"/>
+      <property name="timeoutUnit" value="SECONDS"/>
+  </bean>
+
   <bean id="billing-stub" class="org.dcache.cells.CellStub">
       <property name="destination" value="${poolmanager.service.billing}"/>
   </bean>
@@ -62,15 +64,19 @@
       <property name="destination" value="${poolmanager.service.broadcast}"/>
   </bean>
 
+  <bean id="rc-pool" class="org.dcache.util.CDCExecutorServiceDecorator">
+      <constructor-arg>
+          <bean class="diskCacheV111.poolManager.RequestContainerExecutor"/>
+      </constructor-arg>
+  </bean>
+
   <bean id="rc" class="diskCacheV111.poolManager.RequestContainerV5"
         destroy-method="shutdown">
     <description>Request container</description>
     <property name="poolSelectionUnit" ref="psu"/>
     <property name="poolMonitor" ref="poolMonitor"/>
     <property name="partitionManager" ref="pm"/>
-    <property name="threadPool">
-      <bean class="${poolmanager.plugins.thread-pool}"/>
-    </property>
+    <property name="executor" ref="rc-pool"/>
     <property name="stageConfigurationFile" value="${poolmanager.authz.staging}"/>
     <property name="pnfsHandler" ref="pnfs"/>
     <property name="hitInfoMessages" value="${poolmanager.enable.cache-hit-message}"/>

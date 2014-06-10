@@ -1,5 +1,3 @@
-// $Id: RequestContainerV5.java,v 1.62 2007-09-02 17:51:31 tigran Exp $
-
 package diskCacheV111.poolManager ;
 
 import com.google.common.collect.ImmutableMap;
@@ -22,6 +20,8 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -31,11 +31,11 @@ import diskCacheV111.util.CostException;
 import diskCacheV111.util.DestinationCostException;
 import diskCacheV111.util.ExtendedRunnable;
 import diskCacheV111.util.FileNotInCacheException;
+import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
 import diskCacheV111.util.PnfsHandler;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.SourceCostException;
-import diskCacheV111.util.ThreadPool;
 import diskCacheV111.vehicles.DCapProtocolInfo;
 import diskCacheV111.vehicles.IpProtocolInfo;
 import diskCacheV111.vehicles.Message;
@@ -50,21 +50,22 @@ import diskCacheV111.vehicles.RestoreHandlerInfo;
 import diskCacheV111.vehicles.StorageInfo;
 import diskCacheV111.vehicles.WarningPnfsFileInfoMessage;
 
+import dmg.cells.nucleus.AbstractCellComponent;
 import dmg.cells.nucleus.CDC;
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellMessage;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.UOID;
-import dmg.util.Args;
 
-import dmg.cells.nucleus.AbstractCellComponent;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.Partition;
 import org.dcache.poolmanager.PartitionManager;
 import org.dcache.poolmanager.PoolInfo;
 import org.dcache.poolmanager.PoolSelector;
+import org.dcache.util.Args;
+import org.dcache.util.FireAndForgetTask;
 import org.dcache.vehicles.FileAttributes;
 
 public class RequestContainerV5
@@ -116,7 +117,7 @@ public class RequestContainerV5
     private PoolMonitorV5      _poolMonitor;
     private PnfsHandler        _pnfsHandler;
     private final SimpleDateFormat   _formatter        = new SimpleDateFormat ("MM.dd HH:mm:ss");
-    private ThreadPool         _threadPool ;
+    private Executor _executor;
     private final Map<PnfsId, CacheException>            _selections       = new HashMap<>() ;
     private PartitionManager   _partitionManager ;
     private long               _checkFilePingTimer = 10 * 60 * 1000 ;
@@ -177,9 +178,9 @@ public class RequestContainerV5
     }
 
     @Required
-    public void setThreadPool(ThreadPool threadPool)
+    public void setExecutor(Executor executor)
     {
-        _threadPool = threadPool;
+        _executor = executor;
     }
 
     public void setHitInfoMessages(boolean sendHitInfo)
@@ -284,9 +285,8 @@ public class RequestContainerV5
     {
        Partition def = _partitionManager.getDefaultPartition();
 
-       pw.println("Restore Controller [$Revision$]\n") ;
        pw.println( "      Retry Timeout : "+(_retryTimer/1000)+" seconds" ) ;
-       pw.println( "  Thread Controller : "+_threadPool ) ;
+       pw.println( "  Thread Controller : "+_executor ) ;
        pw.println( "    Maximum Retries : "+_maxRetries ) ;
        pw.println( "    Pool Ping Timer : "+(_checkFilePingTimer/1000) + " seconds" ) ;
        pw.println( "           On Error : "+_onError ) ;
@@ -308,22 +308,12 @@ public class RequestContainerV5
     @Override
     public void printSetup(PrintWriter pw)
     {
-        pw.append("#\n# Submodule [rc] : ").append(this.getClass().toString()).append("\n#\n");
         pw.append("rc onerror ").println(_onError);
         pw.append("rc set max retries ").println(_maxRetries);
         pw.append("rc set retry ").println(_retryTimer/1000);
         pw.append("rc set poolpingtimer ").println(_checkFilePingTimer/1000);
         pw.append("rc set max restore ")
             .println(_maxRestore<0?"unlimited":(""+_maxRestore));
-        pw.append("rc set max threads ")
-            .println(_threadPool.getMaxThreadCount());
-    }
-
-    public static final String hh_rc_set_max_threads = "<threadCount> # 0 : no limits" ;
-    public String ac_rc_set_max_threads_$_1( Args args ){
-       int n = Integer.parseInt(args.argv(0));
-       _threadPool.setMaxThreadCount(n);
-       return "New max thread count : "+n;
     }
 
     public final static String hh_rc_set_sameHostCopy =
@@ -768,6 +758,7 @@ public class RequestContainerV5
         private   StorageInfo  _storageInfo;
         private   ProtocolInfo _protocolInfo;
         private   String       _linkGroup;
+        private   FsPath _path;
 
         private   boolean _enforceP2P;
         private   int     _destinationFileStatus = Pool2PoolTransferMsg.UNDETERMINED ;
@@ -925,6 +916,7 @@ public class RequestContainerV5
            _protocolInfo = request.getProtocolInfo();
            _fileAttributes = request.getFileAttributes();
            _storageInfo = _fileAttributes.getStorageInfo();
+           _path = request.getPnfsPath();
 
            _retryCounter = request.getContext().getRetryCounter();
            _stageCandidateHost = request.getContext().getPreviousStageHost();
@@ -947,7 +939,7 @@ public class RequestContainerV5
 
         public List<CellMessage> getMessages() {
             synchronized( _handlerHash ){
-                return new ArrayList(_messages);
+                return new ArrayList<>(_messages);
             }
         }
 
@@ -1223,7 +1215,6 @@ public class RequestContainerV5
            }
         }
         private void add( Object obj ){
-
            synchronized( _fifo ){
                _log.info( "Adding Object : "+obj ) ;
                _fifo.addFirst(obj) ;
@@ -1233,7 +1224,7 @@ public class RequestContainerV5
                _log.info( "Starting Engine" ) ;
                _stateEngineActive = true ;
                try {
-                   _threadPool.invokeLater(new RunEngine(), "Read-"+_pnfsId);
+                   _executor.execute(new FireAndForgetTask(new RunEngine()));
                } catch (RuntimeException e) {
                    _stateEngineActive = false;
                    throw e;
@@ -1319,7 +1310,7 @@ public class RequestContainerV5
                 _state = RequestState.ST_DONE;
                 _forceContinue = true;
                 _status = "Failed";
-                sendInfoMessage(_pnfsId , _storageInfo ,
+                sendInfoMessage(_pnfsId , _path, _fileAttributes,
                                 _currentRc , "Failed "+_currentRm);
             } else {
                 if (state == RequestState.ST_STAGE && !canStage()) {
@@ -1329,7 +1320,7 @@ public class RequestContainerV5
                     _log.debug("Subject is not authorized to stage");
                     _currentRc = CacheException.FILE_NOT_ONLINE;
                     _currentRm = "File not online. Staging not allowed.";
-                    sendInfoMessage(_pnfsId , _storageInfo ,
+                    sendInfoMessage(_pnfsId , _path, _fileAttributes,
                                     _currentRc , "Permission denied." + _currentRm);
                 } else if (!_allowedStates.contains(state)) {
                     _state = RequestState.ST_DONE;
@@ -1338,7 +1329,7 @@ public class RequestContainerV5
                     _log.debug("No permission to perform {}", state);
                     _currentRc = CacheException.PERMISSION_DENIED;
                     _currentRm = "Permission denied.";
-                    sendInfoMessage(_pnfsId, _storageInfo, _currentRc,
+                    sendInfoMessage(_pnfsId, _path, _fileAttributes, _currentRc,
                                     "Permission denied for " + state);
                 } else {
                     _state = state;
@@ -1500,7 +1491,8 @@ public class RequestContainerV5
                        nextStep(RequestState.ST_DONE , CONTINUE ) ;
                        _log.info("AskIfAvailable found the object");
                        if (_sendHitInfo ) {
-                           sendHitMsg(_pnfsId, (_bestPool != null) ? _bestPool.getName() : "<UNKNOWN>", true);   //VP
+                           sendHitMsg(_pnfsId, _path, (_bestPool != null) ? _bestPool.getName() : "<UNKNOWN>",
+                                      _fileAttributes, _protocolInfo, true);   //VP
                        }
 
                     }else if( rc == RT_NOT_FOUND ){
@@ -1517,7 +1509,8 @@ public class RequestContainerV5
                           suspendIfEnabled("Suspended (pool unavailable)");
                        }
                        if (_sendHitInfo && _poolCandidate == null) {
-                           sendHitMsg(  _pnfsId, (_bestPool!=null)?_bestPool.getName():"<UNKNOWN>", false );   //VP
+                           sendHitMsg(  _pnfsId, _path, (_bestPool!=null)?_bestPool.getName():"<UNKNOWN>",
+                                        _fileAttributes, _protocolInfo, false );   //VP
                        }
                        //
                     }else if( rc == RT_NOT_PERMITTED ){
@@ -1577,9 +1570,9 @@ public class RequestContainerV5
                        _pingHandler.startP2P(_p2pDestinationPool) ;
 
                        if (_sendHitInfo ) {
-                           sendHitMsg(_pnfsId,
-                                   (_p2pSourcePool != null) ?
-                                           _p2pSourcePool.getName() : "<UNKNOWN>", true);   //VP
+                           sendHitMsg(_pnfsId, _path,
+                                   (_p2pSourcePool != null) ? _p2pSourcePool.getName() : "<UNKNOWN>",
+                                   _fileAttributes, _protocolInfo, true);   //VP
                        }
 
                     }else if( rc == RT_NOT_PERMITTED ){
@@ -1842,7 +1835,7 @@ public class RequestContainerV5
            setError(5,"Resource temporarily unavailable : "+detail);
            nextStep(RequestState.ST_DONE , CONTINUE ) ;
            _status = "Failed" ;
-           sendInfoMessage( _pnfsId , _storageInfo ,
+           sendInfoMessage( _pnfsId , _path, _fileAttributes,
                             _currentRc , "Failed "+_currentRm );
         }
 
@@ -1861,7 +1854,7 @@ public class RequestContainerV5
             _log.debug(" stateEngine: SUSPENDED/WAIT ");
             _status = status + " " + _formatter.format(new Date());
             nextStep(RequestState.ST_SUSPENDED, WAIT);
-            sendInfoMessage(_pnfsId, _storageInfo,
+            sendInfoMessage(_pnfsId, _path, _fileAttributes,
                     _currentRc, "Suspended (" + _currentRm + ")");
         }
 
@@ -2167,27 +2160,34 @@ public class RequestContainerV5
         }
     }
 
-    private void sendInfoMessage( PnfsId pnfsId ,
-                                  StorageInfo storageInfo ,
+    private void sendInfoMessage( PnfsId pnfsId , FsPath path,
+                                  FileAttributes fileAttributes,
                                   int rc , String infoMessage ){
       try{
         WarningPnfsFileInfoMessage info =
             new WarningPnfsFileInfoMessage(
                                     "PoolManager","PoolManager",pnfsId ,
                                     rc , infoMessage )  ;
-        info.setStorageInfo(storageInfo);
-        _billing.send(info);
+        info.setStorageInfo(fileAttributes.getStorageInfo());
+        info.setFileSize(fileAttributes.getSize());
+        info.setPath(path);
+        _billing.notify(info);
       } catch (NoRouteToCellException e) {
           _log.warn("Couldn't send WarningInfoMessage: {}", e.toString());
       }
     }
 
-    private void sendHitMsg(PnfsId pnfsId, String poolName, boolean cached)
+    private void sendHitMsg(PnfsId pnfsId, FsPath path, String poolName,
+                            FileAttributes fileAttributes, ProtocolInfo protocolInfo, boolean cached)
     {
         try {
             PoolHitInfoMessage msg = new PoolHitInfoMessage(poolName, pnfsId);
+            msg.setPath(path);
             msg.setFileCached(cached);
-            _billing.send(msg);
+            msg.setStorageInfo(fileAttributes.getStorageInfo());
+            msg.setFileSize(fileAttributes.getSize());
+            msg.setProtocolInfo(protocolInfo);
+            _billing.notify(msg);
         } catch (NoRouteToCellException e) {
             _log.warn("Couldn't report hit info for {}: {}",
                       pnfsId, e.toString());

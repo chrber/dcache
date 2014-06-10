@@ -1,6 +1,7 @@
 package dmg.cells.services.login;
 
 import com.google.common.base.Splitter;
+import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -44,12 +46,12 @@ import dmg.cells.nucleus.CellNucleus;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.CellVersion;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
 import dmg.util.KeepAliveListener;
 import dmg.util.StreamEngine;
 import dmg.util.UserValidatable;
 
 import org.dcache.auth.Subjects;
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -200,6 +202,7 @@ public class LoginManager
                 _loginBrokerHandler.setUpdateTime(_args.getLongOption("brokerUpdateTime"));
                 _loginBrokerHandler.setUpdateTimeUnit(TimeUnit.valueOf(_args.getOption("brokerUpdateTimeUnit")));
                 _loginBrokerHandler.setUpdateThreshold(_args.getDoubleOption("brokerUpdateOffset"));
+                _loginBrokerHandler.setRoot(Strings.emptyToNull(_args.getOption("root")));
                 _loginBrokerHandler.afterSetup();
                 _loginBrokerHandler.start();
                 _loginBrokerHandler.afterStart();
@@ -366,7 +369,7 @@ public class LoginManager
                 LOGGER.info("Sending ({}) 'listening on {} {}'", i, getCellName(), listenPort);
 
                 try {
-                    if (sendAndWait(msg, 5000) != null) {
+                    if (getNucleus().sendAndWait(msg, 5000) != null) {
                         LOGGER.info("Portnumber successfully sent to {}", dest);
                         _sending = false;
                         break;
@@ -926,7 +929,7 @@ public class LoginManager
 
         try {
             CellMessage msg = new CellMessage(_authenticator, request);
-            msg = sendAndWait(msg, 10000);
+            msg = getNucleus().sendAndWait(msg, (long) 10000);
             if (msg == null) {
                 LOGGER.warn("Pam request timed out {}", Thread.currentThread().getStackTrace());
                 return false;
@@ -941,6 +944,9 @@ public class LoginManager
             return false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException e) {
+            LOGGER.warn(e.getCause().getMessage());
             return false;
         }
     }

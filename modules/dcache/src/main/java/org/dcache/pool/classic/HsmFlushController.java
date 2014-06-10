@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.PrintWriter;
 import java.io.Serializable;
+import java.nio.channels.CompletionHandler;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -19,7 +20,6 @@ import java.util.concurrent.TimeUnit;
 import diskCacheV111.pools.PoolCellInfo;
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.PnfsId;
-import diskCacheV111.vehicles.PoolFlushControlMessage;
 import diskCacheV111.vehicles.PoolFlushDoFlushMessage;
 import diskCacheV111.vehicles.PoolFlushGainControlMessage;
 
@@ -52,7 +52,6 @@ public class HsmFlushController
 
     private final ScheduledExecutorService _flushExecutor = createFlushExecutor();
     private final StorageClassContainer _storageQueue;
-    private final HsmStorageHandler2 _storageHandler;
     private final FireAndForgetTask _flushTask = new FireAndForgetTask(new FlushTask());
 
     private ScheduledFuture<?> _future;
@@ -62,11 +61,9 @@ public class HsmFlushController
     private int _maxActive = 1000;
 
     public HsmFlushController(
-            StorageClassContainer storageQueue,
-            HsmStorageHandler2 storageHandler)
+            StorageClassContainer storageQueue)
     {
         _storageQueue = storageQueue;
-        _storageHandler = storageHandler;
     }
 
     private ScheduledThreadPoolExecutor createFlushExecutor()
@@ -143,24 +140,6 @@ public class HsmFlushController
         _flushExecutor.shutdown();
     }
 
-    public long flushStorageClass(String hsm, String storageClass, int maxCount)
-            throws IllegalArgumentException
-    {
-        return flushStorageClass(hsm, storageClass, maxCount, null);
-    }
-
-    private long flushStorageClass(String hsm, String storageClass, int maxCount,
-                                   StorageClassInfoFlushable callback)
-            throws IllegalArgumentException
-    {
-        StorageClassInfo info = _storageQueue.getStorageClassInfo(hsm, storageClass);
-        if (info == null) {
-            throw new IllegalArgumentException("No such storage class: " + storageClass + "@" + hsm);
-        }
-        LOGGER.info("Flushing {}", info);
-        return info.submit(_storageHandler, maxCount, callback);
-    }
-
     public synchronized PoolFlushGainControlMessage messageArrived(PoolFlushGainControlMessage gain)
     {
         long holdTimer = gain.getHoldTimer();
@@ -180,12 +159,6 @@ public class HsmFlushController
         PrivateFlush flush = new PrivateFlush(msg);
         _flushExecutor.execute(new FireAndForgetTask(flush));
         return flush;
-    }
-
-    public synchronized PoolFlushControlMessage messageArrived(PoolFlushControlMessage msg)
-            throws CacheException
-    {
-        throw new CacheException(354, "Message type not supported: " + msg.getClass().getName());
     }
 
     @Override
@@ -225,11 +198,15 @@ public class HsmFlushController
             String composed = storageClass + "@" + hsm;
 
             try {
-                long flushId = flushStorageClass(hsm, storageClass, _flush.getMaxFlushCount(), this);
-                _flush.setFlushId(flushId);
-            } catch (IllegalArgumentException e) {
-                LOGGER.error("Private flush failed for {}: {}", composed, e.toString());
-                _flush.setFailed(576, e);
+                StorageClassInfo info = _storageQueue.getStorageClassInfo(hsm, storageClass);
+                if (info == null) {
+                    LOGGER.error("Flush failed: No queue for {}", composed);
+                    _flush.setFailed(576, "Flush failed: No queue for " + composed);
+                } else {
+                    int max = _flush.getMaxFlushCount();
+                    long flushId = info.flush((max == 0) ? Integer.MAX_VALUE : max, this);
+                    _flush.setFlushId(flushId);
+                }
             } catch (RuntimeException e) {
                 LOGGER.error("Private flush failed for " + composed + ". Please report to support@dcache.org", e);
                 _flush.setFailed(576, e);
@@ -258,26 +235,12 @@ public class HsmFlushController
         @Override
         public void run()
         {
-            long now = System.currentTimeMillis();
-            int maxActive = getMaxActive();
-            int active = 0;
-            for (StorageClassInfo info: _storageQueue.getStorageClassInfos()) {
-                if (active >= maxActive) {
-                    break;
-                }
-                if (info.getActiveCount() > 0) {
-                    active++;
-                } else if (info.isTriggered() &&
-                        ((now - info.getLastSubmitted()) > _retryDelayOnError)) {
-                    flushStorageClass(info.getHsm(), info.getStorageClass(), 0);
-                    active++;
-                }
-            }
+            _storageQueue.flushAll(getMaxActive(), _retryDelayOnError);
         }
     }
 
     @Command(name = "flush set max active",
-            usage = "Set the maximum number of storage classes to flush simultaneously.")
+            description = "Set the maximum number of storage classes to flush simultaneously.")
     class SetMaxActiveCommand implements Callable<String>
     {
         @Argument
@@ -293,7 +256,7 @@ public class HsmFlushController
     }
 
     @Command(name = "flush set interval",
-            usage = "Set the interval at which to flush files to tape")
+            description = "Set the interval at which to flush files to tape")
     class SetIntervalCommand implements Callable<String>
     {
         @Argument(metaVar = "seconds")
@@ -309,7 +272,7 @@ public class HsmFlushController
     }
 
     @Command(name = "flush set retry delay",
-            usage = "Set the minimum delay before the next flush after a failure.")
+            description = "Set the minimum delay before the next flush after a failure.")
     class SetRetryDelayCommand implements Callable<String>
     {
         @Argument(metaVar = "seconds")
@@ -325,7 +288,7 @@ public class HsmFlushController
     }
 
     @Command(name = "flush ls",
-            usage = "List the storge classes queued for flush.")
+            description = "List the storage classes queued for flush.")
     class ListCommand implements Callable<Serializable>
     {
         @Option(name = "binary")
@@ -376,7 +339,7 @@ public class HsmFlushController
     }
 
     @Command(name = "flush class",
-            usage = "Flush files of storage class to tape.")
+            description = "Flush files of storage class to tape.")
     class FlushClassCommand implements Callable<String>
     {
         @Argument(index = 0)
@@ -387,18 +350,22 @@ public class HsmFlushController
 
         @Option(name = "count",
                 usage = "Maximum number of files to flush.")
-        int count = 0;
+        int count = Integer.MAX_VALUE;
 
         @Override
         public String call() throws IllegalArgumentException
         {
-            long id = flushStorageClass(hsm, storageClass, count);
+            StorageClassInfo info = _storageQueue.getStorageClassInfo(hsm, storageClass);
+            if (info == null) {
+                throw new IllegalArgumentException("No such storage class: " + storageClass + "@" + hsm);
+            }
+            long id = info.flush(count, null);
             return "Flush initiated (id=" + id + ")";
         }
     }
 
     @Command(name = "flush pnfsid",
-            usage = "Flush a single file to tape.")
+            description = "Flush a single file to tape.")
     class FlushPnfsIdCommand implements Callable<String>
     {
         @Argument
@@ -407,7 +374,20 @@ public class HsmFlushController
         @Override
         public String call() throws CacheException, InterruptedException
         {
-            _storageHandler.store(pnfsId, null);
+            _storageQueue.flush(pnfsId,
+                    new CompletionHandler<Void, PnfsId>()
+                    {
+                        @Override
+                        public void completed(Void result, PnfsId attachment)
+                        {
+                        }
+
+                        @Override
+                        public void failed(Throwable exc, PnfsId attachment)
+                        {
+                            LOGGER.error("Flush for {} failed: {}", pnfsId, exc.toString());
+                        }
+                    });
             return "Flush Initiated";
         }
     }

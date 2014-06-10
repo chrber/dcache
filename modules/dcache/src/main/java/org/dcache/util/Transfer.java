@@ -764,7 +764,7 @@ public class Transfer implements Comparable<Transfer>
                                                   allocated);
                 request.setId(_sessionId);
                 request.setSubject(_subject);
-                request.setPnfsPath(_path.toString());
+                request.setPnfsPath(_path);
 
                 PoolMgrSelectWritePoolMsg reply =
                     _poolManager.sendAndWait(request, timeout);
@@ -784,7 +784,7 @@ public class Transfer implements Comparable<Transfer>
                                                  allowedStates);
                 request.setId(_sessionId);
                 request.setSubject(_subject);
-                request.setPnfsPath(_path.toString());
+                request.setPnfsPath(_path);
 
                 PoolMgrSelectReadPoolMsg reply =
                     _poolManager.sendAndWait(request, timeout);
@@ -844,6 +844,7 @@ public class Transfer implements Comparable<Transfer>
                 message =
                     new PoolDeliverFileMessage(pool, protocolInfo, fileAttributes);
             }
+            message.setPnfsPath(_path);
             message.setIoQueueName(queue);
             message.setInitiator(getTransaction());
             message.setId(_sessionId);
@@ -891,7 +892,7 @@ public class Transfer implements Comparable<Transfer>
             PoolMoverKillMessage message =
                 new PoolMoverKillMessage(pool, moverId);
             message.setReplyRequired(false);
-            _pool.send(new CellPath(poolAddress), message);
+            _pool.notify(new CellPath(poolAddress), message);
 
             /* To reduce the risk of orphans when using PNFS, we wait
              * for the transfer confirmation.
@@ -969,7 +970,7 @@ public class Transfer implements Comparable<Transfer>
             DoorRequestInfoMessage msg =
                 new DoorRequestInfoMessage(getCellName() + "@" + getDomainName());
             msg.setSubject(_subject);
-            msg.setPath(_path.toString());
+            msg.setPath(_path);
             msg.setTransactionDuration(System.currentTimeMillis() - _startedAt);
             msg.setTransaction(getTransaction());
             msg.setClient(_clientAddress.getAddress().getHostAddress());
@@ -978,7 +979,7 @@ public class Transfer implements Comparable<Transfer>
             if (_fileAttributes.isDefined(STORAGEINFO)) {
                 msg.setStorageInfo(_fileAttributes.getStorageInfo());
             }
-            _billing.send(msg);
+            _billing.notify(msg);
 
             _isBillingNotified = true;
         } catch (NoRouteToCellException e) {

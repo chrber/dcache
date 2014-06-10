@@ -10,13 +10,12 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 
-import dmg.util.Args;
 import dmg.util.AuthorizedString;
-import dmg.util.CommandException;
-import dmg.util.CommandRequestable;
 import dmg.util.DomainInterruptHandler;
 import dmg.util.Gate;
 import dmg.util.logback.FilterShell;
+
+import org.dcache.util.Args;
 
 /**
   *
@@ -65,6 +64,7 @@ public class      SystemCell
        _cellShell.addCommandListener(this);
        _cellShell.addCommandListener(new LogbackShell());
        _cellShell.addCommandListener(new FilterShell(_nucleus.getLoggingThresholds()));
+       _cellShell.addCommandListener(_cellShell.new HelpCommands());
        useInterpreter( false ) ;
 
        _runtime.addShutdownHook( new TheKiller() ) ;
@@ -261,11 +261,15 @@ public class      SystemCell
 
         if(obj instanceof String) {
            String command = (String) obj;
-           if(command.length() < 1) {
+           if (command.isEmpty()) {
                return;
            }
-           _log.info( "Command : "+command ) ;
-           reply = _cellShell.objectCommand2( command ) ;
+           _log.info("Command: {}", command);
+           if (command.equals("xyzzy")) {
+               reply = "Nothing happens.";
+           } else {
+               reply = _cellShell.objectCommand2(command);
+           }
            processed = true;
         }else if( obj instanceof AuthorizedString ){
            AuthorizedString as = (AuthorizedString)obj ;
@@ -275,15 +279,6 @@ public class      SystemCell
            }
            _log.info( "Command(p="+as.getAuthorizedPrincipal()+") : "+command ) ;
            reply = _cellShell.objectCommand2( command ) ;
-           processed = true;
-        }else if( obj instanceof CommandRequestable ){
-           CommandRequestable request = (CommandRequestable)obj ;
-           try{
-               _log.info( "Command : "+request.getRequestCommand() ) ;
-              reply = _cellShell.command( request ) ;
-           }catch( CommandException cee ){
-              reply = cee ;
-           }
            processed = true;
         }
 

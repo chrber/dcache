@@ -172,7 +172,7 @@ public class ChecksumModuleV1
     }
 
     @Command(name = "csm info",
-            usage = "Shows current checksum module configuration.")
+            description = "Shows current checksum module configuration.")
     public class InfoCommand implements Callable<String>
     {
         @Override
@@ -183,7 +183,7 @@ public class ChecksumModuleV1
     }
 
     @Command(name = "csm set policy",
-            usage = "Define the checksum policy of the pool.")
+            description = "Define the checksum policy of the pool.")
     public class SetPolicyCommand implements Callable<String>
     {
         @Option(name = "scrub",
@@ -334,7 +334,7 @@ public class ChecksumModuleV1
     }
 
     @Command(name = "csm set checksumtype",
-            usage = "Sets the default checksum type to compute and store for new files.\n\n" +
+            description = "Sets the default checksum type to compute and store for new files.\n\n" +
                     "Unless the client has specified a checksum of a different type, the default " +
                     "checksum defines the checksum that is computed for each new file and stored " +
                     "in the name space.")

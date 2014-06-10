@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.target.dynamic.Refreshable;
 import org.springframework.beans.factory.annotation.Required;
 import org.springframework.dao.DataAccessException;
+import org.springframework.remoting.RemoteAccessException;
 
 import java.io.File;
 import java.io.PrintWriter;
@@ -92,7 +93,13 @@ public class LinkGroupLoader
     @Override
     public void run(){
             while(true) {
-                updateLinkGroups();
+                try {
+                    updateLinkGroups();
+                } catch (RemoteAccessException e) {
+                    LOGGER.error("Link group update failed: {}", e.getMessage());
+                } catch (RuntimeException e) {
+                    LOGGER.error("Link group update failed: " +  e.toString(), e);
+                }
                 synchronized(updateLinkGroupsSyncObject) {
                     try {
                         updateLinkGroupsSyncObject.wait(currentUpdateLinkGroupsPeriod);
@@ -176,7 +183,7 @@ public class LinkGroupLoader
     }
 
     @Command(name = "update link groups", hint = "trigger link group update",
-             usage = "Link groups are periodically imported from pool manager and stored in " +
+             description = "Link groups are periodically imported from pool manager and stored in " +
                      "the space manager database. This command triggers an immediate " +
                      "asynchronous update of the link group information.")
     public class UpdateLinkGroupsCommand implements Callable<String>

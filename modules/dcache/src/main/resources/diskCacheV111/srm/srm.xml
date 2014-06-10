@@ -2,51 +2,16 @@
 <beans xmlns="http://www.springframework.org/schema/beans"
        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
        xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:util="http://www.springframework.org/schema/util"
        xsi:schemaLocation="http://www.springframework.org/schema/beans
               http://www.springframework.org/schema/beans/spring-beans.xsd
               http://www.springframework.org/schema/context
-              http://www.springframework.org/schema/context/spring-context.xsd">
+              http://www.springframework.org/schema/context/spring-context.xsd
+              http://www.springframework.org/schema/util
+              http://www.springframework.org/schema/util/spring-util.xsd">
 
+  <context:property-placeholder/>
   <context:annotation-config/>
-
-  <!--
-    Note that we have a three-node circular dependency with the
-    following beans referencing each other:
-
-        config   references  storage,
-        storage  references  srm,
-        srm      references  config.
-
-    However, the "srm" bean's requirement on "config" is stronger: not
-    only must "config" exists, but also that it has been configured
-    with the "storage" bean.  This is because the SRM will fetch the
-    AbstractStorageElement object from Configuration, decorate it and
-    replace Configuration with the decorated object.
-
-    Therefore, we must ensure that the following events happen in this
-    order:
-
-        1. "storage" bean is created,
-        2. "config" bean is created,
-        3. "config" bean is configured with the "storage" bean,
-        4. "srm" bean is created.
-
-    Spring does not complain about this circular dependency.  It will
-    create objects and initialise them in an undocumented ordering,
-    which seems to depend on where within the XML file the bean is
-    described.
-
-    To avoid this abitrary behaviour, the Spring 'depends-on'
-    attribute is used to make the ordering explicit:
-
-        srm     depends-on  config,
-        config  depends-on  storage.
-  -->
-
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
 
   <!-- Convert properties with multiple values separated by comma into an array of strings:
        key=value1,value2,value3 : String[] {value1, value2, value3}
@@ -65,6 +30,7 @@
     <property name="destination" value="${srm.service.poolmanager}"/>
     <property name="timeout" value="${srm.service.poolmanager.timeout}"/>
     <property name="timeoutUnit" value="${srm.service.poolmanager.timeout.unit}"/>
+    <property name="retryOnNoRouteToCell" value="true"/>
   </bean>
 
   <bean id="gplazma-stub" class="org.dcache.cells.CellStub">
@@ -72,6 +38,11 @@
     <property name="destination" value="${srm.service.gplazma}"/>
     <property name="timeout" value="${srm.service.gplazma.timeout}" />
     <property name="timeoutUnit" value="${srm.service.gplazma.timeout.unit}" />
+  </bean>
+
+  <bean id="billing-stub" class="org.dcache.cells.CellStub">
+    <description>Billing communication stub</description>
+    <property name="destination" value="${srm.service.billing}"/>
   </bean>
 
   <bean id="space-manager-stub" class="org.dcache.cells.CellStub">
@@ -127,7 +98,22 @@
     <constructor-arg ref="pnfs"/>
   </bean>
 
-  <bean id="lb" class="dmg.cells.services.login.LoginBrokerHandler"
+  <bean id="messageExecutor"
+        class="java.util.concurrent.ThreadPoolExecutor"
+        destroy-method="shutdown">
+      <description>Thread pool for message processing</description>
+      <constructor-arg value="${srm.cell.limits.message.threads.min}"/>
+      <constructor-arg value="${srm.cell.limits.message.threads.max}"/>
+      <constructor-arg value="${srm.cell.limits.message.threads.max-idle-time}"/>
+      <constructor-arg value="${srm.cell.limits.message.threads.max-idle-time.unit}"/>
+      <constructor-arg>
+          <bean class="java.util.concurrent.ArrayBlockingQueue">
+              <constructor-arg value="${srm.cell.limits.message.queue.max}"/>
+          </bean>
+      </constructor-arg>
+  </bean>
+
+  <bean id="lb" class="diskCacheV111.srm.dcache.SrmLoginBrokerHandler"
         init-method="start"
         destroy-method="stop">
     <description>Registers the door with a LoginBroker</description>
@@ -147,6 +133,8 @@
     <property name="address" value="#{ '${srm.net.listen}'.equals('any') ? null : '${srm.net.listen}' }"/>
     <property name="port" value="${srm.net.port}"/>
     <property name="loginBrokers" value="${srm.service.loginbroker}"/>
+    <property name="root" value="${srm.root}"/>
+    <property name="srm" ref="srm"/>
   </bean>
 
   <bean id="auth-persistence-manager" class="diskCacheV111.srm.dcache.DcacheUserPersistenceManager">
@@ -181,20 +169,29 @@
     <constructor-arg ref="auth-persistence-manager"/>
   </bean>
 
-  <bean id="storage" class="diskCacheV111.srm.dcache.Storage"
-        init-method="start" destroy-method="stop">
+    <bean id="pool-monitor" class="org.dcache.poolmanager.RemotePoolMonitorFactoryBean">
+        <description>Maintains runtime information about all pools</description>
+        <property name="poolManagerStub" ref="pool-manager-stub"/>
+    </bean>
+
+  <bean id="storage" class="diskCacheV111.srm.dcache.Storage">
     <description>dCache plugin for SRM</description>
+    <property name="executor">
+        <bean class="java.util.concurrent.Executors"
+              factory-method="newCachedThreadPool"
+              destroy-method="shutdown"/>
+    </property>
     <property name="directoryListSource" ref="list-handler"/>
-    <property name="loginBrokerHandler" ref="lb"/>
     <property name="loginBrokerStub" ref="login-broker-stub"/>
     <property name="pnfsStub" ref="pnfs-stub"/>
     <property name="pnfsHandler" ref="pnfs"/>
     <property name="poolManagerStub" ref="pool-manager-stub"/>
+    <property name="poolMonitor" ref="pool-monitor"/>
     <property name="spaceManagerStub" ref="space-manager-stub"/>
     <property name="transferManagerStub" ref="transfer-manager-stub"/>
     <property name="copyManagerStub" ref="copy-manager-stub"/>
     <property name="pinManagerStub" ref="pin-manager-stub"/>
-    <property name="gplazmaStub" ref="gplazma-stub"/>
+    <property name="billingStub" ref="billing-stub"/>
     <property name="isSpaceManagerEnabled"
               value="${srm.enable.space-reservation}"/>
     <property name="loginBrokerUpdatePeriod"
@@ -205,17 +202,14 @@
               value="${srm.protocols.population-size}"/>
     <property name="useCustomGetHostByAddress"
               value="${srm.enable.custom-get-host-by-address}"/>
-    <property name="httpRootPath" value="${srm.service.webdav.root}"/>
-    <property name="xrootdRootPath" value="${srm.service.xrootd.root}"/>
     <property name="configuration" ref="config"/>
     <property name="pinOnlineFiles" value="${srm.enable.pin-online-files}"/>
     <property name="srmPutNotSupportedProtocols" value="${srm.protocols.disallowed.put}"/>
     <property name="srmGetNotSupportedProtocols" value="${srm.protocols.disallowed.get}"/>
     <property name="srmPreferredProtocols" value="${srm.protocols.preferred}"/>
-    <property name="srm" ref="srm"/>
   </bean>
 
-  <bean id="config" class="org.dcache.srm.util.Configuration" depends-on="storage">
+  <bean id="config" class="org.dcache.srm.util.Configuration">
     <description>SRM configuration</description>
     <property name="port" value="${srm.net.port}"/>
     <property name="timeout"
@@ -260,104 +254,56 @@
     <property name="recursiveDirectoryCreation"
               value="${srm.enable.recursive-directory-creation}"/>
     <property name="advisoryDelete" value="${srm.enable.advisory-delete}"/>
-    <property name="reserve_space_implicitely"
-              value="${srm.enable.space-reservation.implicit}"/>
-    <property name="space_reservation_strict"
-              value="${srm.enable.space-reservation.strict}"/>
 
-    <property name="getReqTQueueSize" value="${srm.request.get.thread-queue-size}"/>
-    <property name="getThreadPoolSize" value="${srm.request.get.threads}"/>
-    <property name="getMaxWaitingRequests" value="${srm.request.get.max-waiting-requests}"/>
-    <property name="getReadyQueueSize" value="${srm.request.get.ready-queue-size}"/>
-    <property name="getMaxReadyJobs" value="${srm.request.get.max-ready-requests}"/>
     <property name="getMaxNumOfRetries"
               value="${srm.request.get.retries}"/>
     <property name="getRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.get.retry-timeout},
                      '${srm.request.get.retry-timeout.unit}')}" />
-    <property name="getMaxRunningBySameOwner"
-              value="${srm.request.get.max-by-same-user}"/>
     <property name="getSwitchToAsynchronousModeDelay"
               value="#{T(org.dcache.commons.util.Strings).parseTime(
                      '${srm.request.get.switch-to-async-mode-delay}',
                      '${srm.request.get.switch-to-async-mode-delay.unit}')}"/>
-    <property name="bringOnlineReqTQueueSize"
-              value="${srm.request.bring-online.thread-queue-size}"/>
-    <property name="bringOnlineThreadPoolSize"
-              value="${srm.request.bring-online.threads}"/>
-    <property name="bringOnlineMaxWaitingRequests"
-              value="${srm.request.bring-online.max-waiting-requests}"/>
-    <property name="bringOnlineReadyQueueSize"
-              value="${srm.request.bring-online.ready-queue-size}"/>
-    <property name="bringOnlineMaxReadyJobs"
-              value="${srm.request.bring-online.max-ready-requests}"/>
     <property name="bringOnlineMaxNumOfRetries"
               value="${srm.request.bring-online.retries}"/>
     <property name="bringOnlineRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.bring-online.retry-timeout},
                      '${srm.request.bring-online.retry-timeout.unit}')}" />
-    <property name="bringOnlineMaxRunningBySameOwner"
-              value="${srm.request.bring-online.max-by-same-user}"/>
     <property name="bringOnlineSwitchToAsynchronousModeDelay"
               value="#{T(org.dcache.commons.util.Strings).parseTime(
                      '${srm.request.bring-online.switch-to-async-mode-delay}',
                      '${srm.request.bring-online.switch-to-async-mode-delay.unit}')}"/>
-    <property name="lsReqTQueueSize" value="${srm.request.ls.thread-queue-size}"/>
-    <property name="lsThreadPoolSize" value="${srm.request.ls.threads}"/>
-    <property name="lsMaxWaitingRequests" value="${srm.request.ls.max-waiting-requests}"/>
-    <property name="lsReadyQueueSize" value="${srm.request.ls.ready-queue-size}"/>
-    <property name="lsMaxReadyJobs" value="${srm.request.ls.max-ready-requests}"/>
     <property name="lsMaxNumOfRetries"
               value="${srm.request.ls.retries}"/>
     <property name="lsRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.ls.retry-timeout},
                      '${srm.request.ls.retry-timeout.unit}')}" />
-    <property name="lsMaxRunningBySameOwner"
-              value="${srm.request.ls.max-by-same-user}"/>
     <property name="lsSwitchToAsynchronousModeDelay"
               value="#{T(org.dcache.commons.util.Strings).parseTime(
                      '${srm.request.ls.switch-to-async-mode-delay}',
                      '${srm.request.ls.switch-to-async-mode-delay.unit}')}"/>
-    <property name="putReqTQueueSize" value="${srm.request.put.thread-queue-size}"/>
-    <property name="putThreadPoolSize" value="${srm.request.put.threads}"/>
-    <property name="putMaxWaitingRequests" value="${srm.request.put.max-waiting-requests}"/>
-    <property name="putReadyQueueSize" value="${srm.request.put.ready-queue-size}"/>
-    <property name="putMaxReadyJobs" value="${srm.request.put.max-ready-requests}"/>
     <property name="putMaxNumOfRetries" value="${srm.request.put.retries}"/>
     <property name="putRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.put.retry-timeout},
                      '${srm.request.put.retry-timeout.unit}')}" />
-    <property name="putMaxRunningBySameOwner" value="${srm.request.put.max-by-same-user}"/>
     <property name="putSwitchToAsynchronousModeDelay"
               value="#{T(org.dcache.commons.util.Strings).parseTime(
                      '${srm.request.put.switch-to-async-mode-delay}',
                      '${srm.request.put.switch-to-async-mode-delay.unit}')}"/>
-    <property name="copyReqTQueueSize" value="${srm.request.copy.thread-queue-size}"/>
-    <property name="copyThreadPoolSize" value="${srm.request.copy.threads}"/>
-    <property name="copyMaxWaitingRequests" value="${srm.request.copy.max-waiting-requests}"/>
     <property name="copyMaxNumOfRetries" value="${srm.request.copy.retries}"/>
     <property name="copyRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.copy.retry-timeout},
                      '${srm.request.copy.retry-timeout.unit}')}" />
-    <property name="copyMaxRunningBySameOwner"
-              value="${srm.request.copy.max-by-same-user}"/>
-    <property name="reserveSpaceReqTQueueSize" value="${srm.request.reserve-space.thread-queue-size}"/>
-    <property name="reserveSpaceThreadPoolSize" value="${srm.request.reserve-space.threads}"/>
-    <property name="reserveSpaceMaxWaitingRequests" value="${srm.request.reserve-space.max-waiting-requests}"/>
-    <property name="reserveSpaceReadyQueueSize" value="${srm.request.reserve-space.ready-queue-size}"/>
-    <property name="reserveSpaceMaxReadyJobs" value="${srm.request.reserve-space.max-ready-requests}"/>
     <property name="reserveSpaceMaxNumOfRetries" value="${srm.request.reserve-space.retries}"/>
     <property name="reserveSpaceRetryTimeout"
               value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
                      ${srm.request.reserve-space.retry-timeout},
                      '${srm.request.reserve-space.retry-timeout.unit}')}" />
-    <property name="reserveSpaceMaxRunningBySameOwner"
-              value="${srm.request.reserve-space.max-by-same-user}"/>
 
     <property name="maxQueuedJdbcTasksNum"
               value="${srm.limits.db.queue}"/>
@@ -373,7 +319,6 @@
     <property name="qosPluginClass" value="${srm.plugins.qos.class}"/>
     <property name="qosConfigFile" value="${srm.plugins.qos.config.file}"/>
 
-    <property name="storage" ref="storage"/>
     <property name="srmUserPersistenceManager" ref="auth-persistence-manager"/>
     <property name="authorization" ref="authorization"/>
     <property name="dataSource" ref="data-source"/>
@@ -482,35 +427,176 @@
               value="#{ '${srm.persistence.reserve-space.enable.store-transient-state}'.equals('false') ? true : false }"/>
   </bean>
 
-  <bean id="data-source" class="com.jolbox.bonecp.BoneCPDataSource"
-        destroy-method="close">
-    <description>Database connection pool</description>
-    <property name="driverClass" value="${srm.db.driver}"/>
-    <property name="jdbcUrl" value="${srm.db.url}"/>
-    <property name="username" value="${srm.db.user}"/>
-    <property name="password" value="#{ T(diskCacheV111.util.Pgpass).getPassword('${srm.db.password.file}', '${srm.db.url}', '${srm.db.user}', '${srm.db.password}') }"/>
-    <property name="partitionCount" value="${srm.db.connections.partition-count}"/>
-    <property name="minConnectionsPerPartition" value="${srm.db.connections.min-per-partition}"/>
-    <property name="maxConnectionsPerPartition" value="${srm.db.connections.max-per-partition}"/>
-    <property name="idleConnectionTestPeriodInMinutes" value="60"/>
-    <property name="idleMaxAgeInMinutes" value="240"/>
-    <property name="acquireIncrement" value="5"/>
-    <property name="statementsCacheSize" value="100"/>
-  </bean>
+    <bean id="data-source" class="com.zaxxer.hikari.HikariDataSource"
+          destroy-method="shutdown">
+        <description>Database connection pool</description>
+        <constructor-arg>
+            <bean class="com.zaxxer.hikari.HikariConfig">
+                <constructor-arg type="java.util.Properties">
+                    <value>
+                        minimumIdle = ${srm.db.connections.idle}
+                        maximumPoolSize = ${srm.db.connections.max}
+                        autoCommit = true
+                        transactionIsolation = TRANSACTION_READ_COMMITTED
+                    </value>
+                </constructor-arg>
+                <property name="dataSource">
+                    <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+                        <property name="url" value="${srm.db.url}"/>
+                        <property name="username" value="${srm.db.user}"/>
+                        <property name="password" value="#{ T(diskCacheV111.util.Pgpass).getPassword('${srm.db.password.file}', '${srm.db.url}', '${srm.db.user}', '${srm.db.password}') }"/>
+                    </bean>
+                </property>
+            </bean>
+        </constructor-arg>
+    </bean>
 
   <bean id="tx-manager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
     <description>Database transaction manager</description>
     <property name="dataSource" ref="data-source"/>
   </bean>
 
-  <bean id="srm" class="org.dcache.srm.SRM" factory-method="getSRM"
-        destroy-method="stop" depends-on="config">
-    <description>SRM engine</description>
+  <bean id="get-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for GET operations</description>
 
-    <constructor-arg ref="config"/>
-    <constructor-arg value="${srm.cell.name}"/>
+      <constructor-arg value="get_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.GetFileRequest"/>
+
+      <property name="threadPoolSize" value="${srm.request.get.threads}"/>
+      <property name="maxRequests" value="${srm.request.get.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.get.max-inprogress}"/>
+      <property name="maxReadyJobs" value="${srm.request.get.max-transfers}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.get.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.get.retry-timeout},
+                     '${srm.request.get.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.get.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
   </bean>
 
+
+  <bean id="ls-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for LS operations</description>
+
+      <constructor-arg value="ls_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.LsFileRequest"/>
+
+      <property name="threadPoolSize" value="${srm.request.ls.threads}"/>
+      <property name="maxRequests" value="${srm.request.ls.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.ls.max-inprogress}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.ls.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.ls.retry-timeout},
+                     '${srm.request.ls.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.ls.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
+  </bean>
+
+
+  <bean id="bringonline-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for BRING-ONLINE operations</description>
+
+      <constructor-arg value="bring_online_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.BringOnlineFileRequest"/>
+
+      <property name="threadPoolSize" value="${srm.request.bring-online.threads}"/>
+      <property name="maxRequests" value="${srm.request.bring-online.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.bring-online.max-inprogress}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.bring-online.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.bring-online.retry-timeout},
+                     '${srm.request.bring-online.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.bring-online.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
+  </bean>
+
+
+  <bean id="put-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for PUT operations</description>
+
+      <constructor-arg value="put_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.PutFileRequest"/>
+
+      <property name="threadPoolSize" value="${srm.request.put.threads}"/>
+      <property name="maxRequests" value="${srm.request.put.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.put.max-inprogress}"/>
+      <property name="maxReadyJobs" value="${srm.request.put.max-transfers}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.put.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.put.retry-timeout},
+                     '${srm.request.put.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.put.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
+  </bean>
+
+  <bean id="copy-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for COPY operations</description>
+
+      <constructor-arg value="copy_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.Job"/>
+
+      <property name="threadPoolSize" value="${srm.request.copy.threads}"/>
+      <property name="maxRequests" value="${srm.request.copy.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.copy.max-inprogress}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.copy.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.copy.retry-timeout},
+                     '${srm.request.copy.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.copy.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
+  </bean>
+
+  <bean id="reserve-space-scheduler" class="org.dcache.srm.scheduler.Scheduler"
+	init-method="start" destroy-method="stop">
+      <description>Scheduler for RESERVE-SPACE operations</description>
+
+      <constructor-arg value="reserve_space_${srm.cell.name}"/>
+      <constructor-arg value="org.dcache.srm.request.ReserveSpaceRequest"/>
+
+      <property name="threadPoolSize" value="${srm.request.reserve-space.threads}"/>
+      <property name="maxRequests" value="${srm.request.reserve-space.max-requests}"/>
+      <property name="maxInprogress" value="${srm.request.reserve-space.max-inprogress}"/>
+      <property name="maxNumberOfRetries" value="${srm.request.reserve-space.retries}"/>
+      <property name="retryTimeout" value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
+                     ${srm.request.reserve-space.retry-timeout},
+                     '${srm.request.reserve-space.retry-timeout.unit}')}" />
+      <property name="maxRunningByOwner" value="${srm.request.reserve-space.max-by-same-user}"/>
+      <property name="priorityPolicyPlugin" value="DefaultJobAppraiser"/>
+  </bean>
+
+
+  <bean id="schedulers" class="org.dcache.srm.scheduler.SchedulerContainer">
+      <description>Collection of schedulers</description>
+
+      <property name="schedulers">
+	  <list>
+	      <ref bean="get-scheduler"/>
+	      <ref bean="ls-scheduler"/>
+	      <ref bean="put-scheduler"/>
+	      <ref bean="bringonline-scheduler"/>
+	      <ref bean="reserve-space-scheduler"/>
+	      <!-- COPY scheduler must be last in list as it has type Job.class -->
+	      <ref bean="copy-scheduler"/>
+	  </list>
+      </property>
+  </bean>
+
+  <bean id="srm" class="org.dcache.srm.SRM" init-method="start" destroy-method="stop">
+    <description>SRM engine</description>
+    <constructor-arg ref="config"/>
+    <constructor-arg ref="storage"/>
+    <property name="schedulers" ref="schedulers"/>
+  </bean>
+
+  <bean id="srm-cli" class="diskCacheV111.srm.dcache.SrmCommandLineInterface">
+    <property name="configuration" ref="config"/>
+    <property name="srm" ref="srm"/>
+  </bean>
 
   <bean id="thread-pool" class="org.eclipse.jetty.util.thread.QueuedThreadPool"
         init-method="start" destroy-method="stop">
@@ -530,6 +616,45 @@
     <description>Banned authentication ciphers</description>
     <constructor-arg value="${srm.authn.ciphers}"/>
   </bean>
+
+
+  <bean id="gridsite-credential-delegation-store"
+	class="org.dcache.gridsite.InMemoryCredentialDelegationStore"
+	init-method="start">
+      <description>Store for on-going GridSite delegations</description>
+
+      <property name="expireAfter"
+		value="#{T(java.util.concurrent.TimeUnit).MINUTES.toMillis(10)}"/>
+      <property name="maxOngoing"
+		value="10000"/>
+  </bean>
+
+
+  <bean id="gridsite-credential-store"
+	class="org.dcache.gridsite.SrmCredentialStore">
+      <description>Bridge between GridSite- and SRM- credential storage</description>
+
+      <property name="requestCredentialStorage"
+		value="#{srm.requestCredentialStorage}"/>
+  </bean>
+
+  <bean id="gridsite-credential-delegation-factory"
+	class="org.dcache.gridsite.BouncyCastleCredentialDelegationFactory">
+      <description>Generation of GridSite delegated credentials that uses BouncyCastle</description>
+
+      <property name="keyPairCache" ref="keypair-cache"/>
+  </bean>
+
+  <bean id="keypair-cache"
+	class="org.dcache.gridsite.KeyPairCache">
+      <description>Cache of key-pairs to reduce delegation overhead</description>
+
+      <constructor-arg value="3600"/> <!-- key-pair regeneration, in seconds -->
+  </bean>
+
+  <util:map id="gridsite-service-metadata">
+      <entry key="implementation" value="dCache"/>
+  </util:map>
 
   <bean id="server" class="org.eclipse.jetty.server.Server"
         init-method="start" destroy-method="stop">
@@ -571,6 +696,14 @@
                              value-ref="storage"/>
                       <entry key="#{ T(org.dcache.srm.util.Axis).ATTRIBUTE_NAME_SRM }"
                              value-ref="srm"/>
+                      <entry key="#{ T(org.dcache.gridsite.ServletDelegation).ATTRIBUTE_NAME_CREDENTIAL_STORE }"
+			     value-ref="gridsite-credential-store"/>
+                      <entry key="#{ T(org.dcache.gridsite.ServletDelegation).ATTRIBUTE_NAME_CREDENTIAL_DELEGATION_STORE }"
+			     value-ref="gridsite-credential-delegation-store"/>
+                      <entry key="#{ T(org.dcache.gridsite.ServletDelegation).ATTRIBUTE_NAME_CREDENTIAL_DELEGATION_FACTORY }"
+			     value-ref="gridsite-credential-delegation-factory"/>
+                      <entry key="#{ T(org.dcache.gridsite.ServletDelegation).ATTRIBUTE_NAME_SERVICE_METADATA }"
+			     value-ref="gridsite-service-metadata"/>
                     </map>
                   </constructor-arg>
                 </bean>

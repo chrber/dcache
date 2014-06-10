@@ -30,10 +30,9 @@ import java.io.OutputStream;
 import java.security.cert.X509Certificate;
 import java.util.Iterator;
 
-import dmg.util.Args;
-
 import org.dcache.auth.FQANPrincipal;
 import org.dcache.auth.util.GSSUtils;
+import org.dcache.util.Args;
 import org.dcache.util.Crypto;
 
 import static org.dcache.util.Files.checkDirectory;
@@ -54,7 +53,6 @@ class GsiTunnel extends GssTunnel  {
     private static final String CIPHER_FLAGS = "ciphers";
 
     private final Args _arguments;
-    private PKIVerifier _pkiVerifier;
     private Subject _subject = new Subject();
 
     // Creates a new instance of GssTunnel
@@ -80,14 +78,6 @@ class GsiTunnel extends GssTunnel  {
             checkFile(service_key);
             checkFile(service_cert);
             checkDirectory(service_trusted_certs);
-
-            try {
-                _pkiVerifier = GSSUtils.getPkiVerifier(service_voms_dir,
-                                                      service_trusted_certs,
-                                                      MDC.getCopyOfContextMap());
-            } catch ( Exception e) {
-                throw new GSSException(GSSException.FAILURE, 0, e.getMessage());
-            }
 
             try {
                 serviceCredential = new X509Credential(service_cert, service_key);
@@ -140,12 +130,9 @@ class GsiTunnel extends GssTunnel  {
     private void scanExtendedAttributes(ExtendedGSSContext gssContext) {
 
         try {
-            Iterator<String> fqans
-                = GSSUtils.getFQANsFromGSSContext(gssContext, _pkiVerifier)
-                .iterator();
             boolean primary = true;
-            while (fqans.hasNext()) {
-                String fqanValue = fqans.next();
+
+            for (String fqanValue : GSSUtils.getFQANsFromGSSContext(gssContext)) {
                 FQAN fqan = new FQAN(fqanValue);
                 String group = fqan.getGroup();
                 String role = fqan.getRole();

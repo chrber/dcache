@@ -77,6 +77,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -88,6 +89,7 @@ import diskCacheV111.srm.RequestFileStatus;
 import diskCacheV111.srm.RequestStatus;
 
 import org.dcache.commons.util.AtomicCounter;
+import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMFileRequestNotFoundException;
 import org.dcache.srm.SRMUser;
 import org.dcache.srm.scheduler.IllegalStateTransition;
@@ -118,7 +120,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
     // dcache  requires that once client created a connection to a dcache door,
     // it uses the same door to make all following dcap transfers
     // therefore we need to synchronize the recept of dcap turls
-    private String firstDcapTurl;
+    private URI previousTurl;
 
     private final List<R> fileRequests;
 
@@ -147,13 +149,12 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
                             int max_number_of_retries,
                             long max_update_period,
                             long lifetime,
-                            String description,
+                            @Nullable String description,
                             String client_host)
     {
          super(user ,
          requestCredentalId,
          max_number_of_retries,
-         max_update_period,
          lifetime,
          description,
          client_host);
@@ -264,41 +265,19 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         }
     }
 
-
-
-    /**
-     * gets first dcap turl
-     * <p>
-     * in case of dcap protocol transfers all transfers performed
-     * by the same client should use the same dcap door,
-     * therefore we store the first dcap turl,
-     * and set the host and port of the rest dcap turls to
-     * host  and port of the first dcap turl
-     * @return
-     * first dcap turl
-     */
-    public String getFirstDcapTurl() {
+    public URI getPreviousTurl() {
         rlock();
         try {
-            return firstDcapTurl;
+            return previousTurl;
         } finally {
             runlock();
         }
     }
-    /**
-     * stores the first dcap turl
-     * in case of dcap protocol transfers all transfers performed
-     * by the same client should use the same dcap door,
-     * therefore we store the first dcap turl,
-     * and set the host and port of the rest dcap turls to
-     * host  and port of the first dcap turl
-     * @param s
-     * first dcap turl
-     */
-    public void setFirstDcapTurl(String s) {
+
+    public void setPreviousTurl(URI s) {
         wlock();
         try {
-            firstDcapTurl = s;
+            previousTurl = s;
         } finally {
             wunlock();
         }
@@ -308,7 +287,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
     public abstract String getMethod();
 
     @Override
-    public TReturnStatus abort()
+    public TReturnStatus abort(String reason)
     {
         boolean hasSuccess = false;
         boolean hasFailure = false;
@@ -330,9 +309,9 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
             if (!getState().isFinal()) {
                 for (R file : getFileRequests()) {
                     try {
-                        file.abort();
+                        file.abort(reason);
                         hasSuccess = true;
-                    } catch (IllegalStateTransition e) {
+                    } catch (SRMException | IllegalStateTransition e) {
                         hasFailure = true;
                     }
                 }
@@ -345,22 +324,6 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         return getSummaryReturnStatus(hasFailure, hasSuccess);
     }
 
-    /**
-     *
-     * we need this methid to send notifications to the concrete instances of
-     *  ContainerRequest that the client creating this request is still alive
-     *  and if the request was in the RESTORED state, this will cause the
-     * scheduling of the request
-     */
-
-    private void getRequestStatusCalled() {
-        scheduleIfRestored();
-        for (R fr: fileRequests) {
-            fr.scheduleIfRestored();
-        }
-        updateRetryDeltaTime();
-    }
-
     public final RequestStatus getRequestStatus() {
         // we used to synchronize on this container request here, but
         // it does not make sence as the file requests are being processed
@@ -370,7 +333,6 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         // we can rely on the fact that
         // once file request reach their final state, this state does not change
         // so the combined logic
-        getRequestStatusCalled();
         RequestStatus rs = new RequestStatus();
         rs.requestId = getRequestNum();
         rs.errorMessage = getLastJobChange().getDescription();
@@ -683,30 +645,36 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         return (int) (getId() ^ getId() >> 32);
     }
 
+
+    /**
+     * Provide a simple human-friendly name for requests of this type.
+     */
+    abstract String getNameForRequestType();
+
     @Override
     public void toString(StringBuilder sb, boolean longformat) {
+        sb.append(getNameForRequestType()).append(" id:").append(getId());
+        sb.append(" files:").append(fileRequests.size());
+        sb.append(" state:").append(getState());
+        TStatusCode code = getStatusCode();
+        if (code != null) {
+            sb.append(" status:").append(code);
+        }
+        sb.append(" by:").append(getUser());
         if (longformat) {
-            sb.append(getMethod()).append("\n");
-            sb.append("id: ").append(getId()).append("\n");
-            sb.append("owner: ").append(getUser()).append("\n");
-            sb.append("state: ").append(getState()).append("\n");
-            sb.append("credential: \"").append(getCredential()).append("\"\n");
-            sb.append("submitted: ").append(new Date(getCreationTime())).append("\n");
-            sb.append("expires: ").append(new Date(getCreationTime() + getLifetime())).append("\n");
-            sb.append("status code: ").append(getStatusCode()).append("\n");
-            sb.append("error message: ").append(getErrorMessage()).append("\n");
-            sb.append("History of State Transitions: \n");
-            sb.append(getHistory());
+            sb.append('\n');
+            sb.append("   Submitted:").append(describe(new Date(getCreationTime()))).append('\n');
+            sb.append("   Expires:").append(describe(new Date(getCreationTime() + getLifetime()))).append('\n');
+            RequestCredential credential = getCredential();
+            if (credential != null) {
+                sb.append("   Credential: \"").append(getCredential()).append("\"\n");
+            }
+            sb.append("   History of State Transitions:\n");
+            sb.append(getHistory("   "));
             for (R fr:fileRequests) {
                 sb.append("\n");
-                fr.toString(sb, longformat);
+                fr.toString(sb, "   ", longformat);
             }
-        } else {
-            sb.append(getMethod());
-            sb.append(" id: ").append(getId());
-            sb.append(" owner: ").append(getUser());
-            sb.append(" state: ").append(getState());
-            sb.append(" number of files:").append(fileRequests.size());
         }
     }
 

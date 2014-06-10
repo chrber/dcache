@@ -17,7 +17,6 @@ define env billingToDb.exe endExe
   onerror shutdown
 
   check -strong billing.db.url
-  check -strong billing.db.driver
   check -strong billing.db.host
   check -strong billing.db.user
   check -strong billing.db.schema.changelog
@@ -30,8 +29,8 @@ define env billingToDb.exe endExe
   check billing.db.password
   check billing.db.password.file
   check billing.db.config.path
-  check billing.db.connections.max-per-partition
-  check billing.db.connections.min-per-partition
+  check billing.db.connections.max
+  check billing.db.connections.idle
   check billing.db.schema.auto
   check billing.db.schema.changelog
 endExe

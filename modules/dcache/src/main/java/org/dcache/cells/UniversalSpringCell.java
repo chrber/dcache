@@ -22,19 +22,18 @@ import org.springframework.beans.PropertyAccessorUtils;
 import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.Resource;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.PropertySource;
 
 import java.beans.PropertyDescriptor;
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -51,11 +50,11 @@ import java.util.Date;
 import java.util.Formatter;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -74,10 +73,13 @@ import dmg.cells.nucleus.DomainContextAware;
 import dmg.cells.nucleus.EnvironmentAware;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.services.SetupInfoMessage;
-import dmg.util.Args;
 import dmg.util.CommandException;
 import dmg.util.CommandThrowableException;
+import dmg.util.command.Argument;
+import dmg.util.command.Command;
+import dmg.util.command.Option;
 
+import org.dcache.util.Args;
 import org.dcache.util.ClassNameComparator;
 import org.dcache.vehicles.BeanQueryAllPropertiesMessage;
 import org.dcache.vehicles.BeanQueryMessage;
@@ -213,6 +215,10 @@ public class UniversalSpringCell
         checkArgument(_setupController == null || _setupClass != null,
                 "Setup class must be specified when a setup controller is used");
 
+        if (_setupFile != null || _setupClass != null) {
+            addCommandListener(new SetupCommandListener());
+        }
+
         /* To ensure that all required file systems are mounted, the
          * admin may specify some required files. We will block until
          * they become available.
@@ -222,40 +228,19 @@ public class UniversalSpringCell
         /* Instantiate Spring application context. This will
          * eagerly instantiate all beans.
          */
-        try {
-            _context =
-                new UniversalSpringCellApplicationContext(getArgs());
-        } catch (BeanInstantiationException e) {
-            Throwable t = e.getMostSpecificCause();
-            Throwables.propagateIfPossible(t);
-            String msg = "Failed to instantiate class " + e.getBeanClass().getName() +
-                    ": " + t.getMessage();
-            throw new CommandThrowableException(msg, t);
-        } catch (BeanCreationException e) {
-            Throwable t = e.getMostSpecificCause();
-            Throwables.propagateIfPossible(t);
-            String msg = "Failed to create bean '" + e.getBeanName() +
-                    "' : " + t.getMessage();
-            throw new CommandThrowableException(msg, t);
-        }
+        createContext();
 
         /* Cell threading is configurable through arguments to
          * UniversalSpringCell. The executors have to be created as
          * beans in the Spring file, however the names of the beans
          * are provided as cell arguments.
          */
-        setupCellExecutors(args.getOpt("callbackExecutor"),
-                           args.getOpt("messageExecutor"));
+        setupCellExecutors(args.getOpt("messageExecutor"));
 
         /* This is a NOP except if somebody subclassed
          * UniversalSpringCell.
          */
         init();
-
-        /* The timeout task is essential to handle cell message
-         * timeouts.
-         */
-        startTimeoutTask();
 
         /* The setup may be provided as static configuration in the
          * domain context, as a setup file on disk or through a setup
@@ -294,15 +279,8 @@ public class UniversalSpringCell
         _lifeCycleAware.clear();
     }
 
-    private void setupCellExecutors(String callbackExecutor, String messageExecutor)
+    private void setupCellExecutors(String messageExecutor)
     {
-        if (callbackExecutor != null) {
-            Object executor = getBean(callbackExecutor);
-            checkState(executor instanceof ThreadPoolExecutor,
-                    "No such bean: " + callbackExecutor);
-            getNucleus().setCallbackExecutor((ThreadPoolExecutor) executor);
-        }
-
         if (messageExecutor != null) {
             Object executor = getBean(messageExecutor);
             checkState(executor instanceof ThreadPoolExecutor,
@@ -403,23 +381,29 @@ public class UniversalSpringCell
     @Override
     public void getInfo(PrintWriter pw)
     {
-        ConfigurableListableBeanFactory factory = _context.getBeanFactory();
-        for (Map.Entry<CellInfoProvider,String> entry: _infoProviders.entrySet()) {
-            CellInfoProvider provider = entry.getKey();
-            String name = entry.getValue();
-            try {
-                BeanDefinition definition = factory.getBeanDefinition(name);
-                String description = definition.getDescription();
-                if (description != null) {
-                    pw.println(String.format("--- %s (%s) ---",
-                                             name, description));
-                } else {
-                    pw.println(String.format("--- %s ---", name));
+        /* getInfo is called during cell initialization, but the context isn't fully
+         * initialized until cell initialization is done.
+         */
+        ConfigurableApplicationContext context = _context;
+        if (context != null) {
+            ConfigurableListableBeanFactory factory = context.getBeanFactory();
+            for (Map.Entry<CellInfoProvider, String> entry : _infoProviders.entrySet()) {
+                CellInfoProvider provider = entry.getKey();
+                String name = entry.getValue();
+                try {
+                    BeanDefinition definition = factory.getBeanDefinition(name);
+                    String description = definition.getDescription();
+                    if (description != null) {
+                        pw.println(String.format("--- %s (%s) ---",
+                                                 name, description));
+                    } else {
+                        pw.println(String.format("--- %s ---", name));
+                    }
+                    provider.getInfo(pw);
+                    pw.println();
+                } catch (NoSuchBeanDefinitionException e) {
+                    LOGGER.error("Failed to query bean definition for {}", name);
                 }
-                provider.getInfo(pw);
-                pw.println();
-            } catch (NoSuchBeanDefinitionException e) {
-                LOGGER.error("Failed to query bean definition for {}", name);
             }
         }
     }
@@ -450,63 +434,6 @@ public class UniversalSpringCell
         for (CellSetupProvider provider: _setupProviders) {
             provider.printSetup(pw);
         }
-    }
-
-    public static final String hh_save = "[-sc=<setupController>|none] [-file=<filename>] # saves setup to disk or setup controller";
-    public String ac_save(Args args)
-        throws IOException, IllegalArgumentException, NoRouteToCellException
-    {
-        String controller = args.getOpt("sc");
-        String file = args.getOpt("file");
-
-        File path;
-        if ("none".equals(controller)) {
-            controller = null;
-            path = _setupFile;
-        } else if (file == null && controller == null) {
-            controller = _setupController;
-            path = _setupFile;
-        } else if (file != null) {
-            path = new File(file);
-        } else {
-            path = null;
-        }
-
-        checkArgument(path != null || controller != null,
-                "Either a setup controller or setup file must be specified");
-
-        if (controller != null) {
-            checkState(!Strings.isNullOrEmpty(_setupClass),
-                    "Cannot save to a setup controller since the cell has no setup class");
-
-            try {
-                StringWriter sw = new StringWriter();
-                printSetup(new PrintWriter(sw));
-
-                SetupInfoMessage info =
-                    new SetupInfoMessage("put", getCellName(),
-                                         _setupClass, sw.toString());
-
-                sendMessage(new CellMessage(new CellPath(controller), info));
-            } catch (NoRouteToCellException e) {
-                throw new NoRouteToCellException("Failed to send setup to " + controller + ": " + e.getMessage());
-            }
-        }
-
-        if (path != null) {
-            File directory = path.getParentFile();
-            File temp = File.createTempFile(path.getName(), null, directory);
-            temp.deleteOnExit();
-
-            try (PrintWriter pw = new PrintWriter(new FileWriter(temp))) {
-                printSetup(pw);
-            }
-
-
-            renameWithBackup(temp, path);
-        }
-
-        return "";
     }
 
     private static void renameWithBackup(File source, File dest)
@@ -568,80 +495,157 @@ public class UniversalSpringCell
         }
     }
 
-    public static final String hh_reload = "-yes";
-    public static final String fh_reload =
-        "This command destroys the current setup and replaces it" +
-        "by the setup on disk.";
-    public String ac_reload(Args args)
-        throws IOException, CommandException
+    public class SetupCommandListener implements CellCommandListener
     {
-        if (!args.hasOption("yes")) {
-            return
-                " This command destroys the current setup\n" +
-                " and replaces it by the setup on disk\n" +
-                " Please use 'reload -yes' if you really want\n" +
-                " to do that.";
-        }
+        @Command(name = "save", hint = "save service configuration")
+        public class SaveCommand implements Callable<String>
+        {
+            @Option(name = "sc", usage = "Cell address of setup controller.")
+            String controller;
 
-        if (_setupFile != null && !_setupFile.exists()) {
-            return String.format("Setup file [%s] does not exist", _setupFile);
-        }
+            @Option(name = "file", usage = "Path of setup file.")
+            File file;
 
-        executeSetup();
-
-        return "";
-    }
-
-    /**
-     * Should be renamed to 'info' when command interpreter learns
-     * to handle overloaded commands.
-     */
-    public static final String hh_infox = "<bean>";
-    public String ac_infox_$_1(Args args)
-    {
-        String name = args.argv(0);
-        Object bean = getBean(name);
-        if (CellInfoProvider.class.isInstance(bean)) {
-            StringWriter s = new StringWriter();
-            PrintWriter pw = new PrintWriter(s);
-            ((CellInfoProvider)bean).getInfo(pw);
-            return s.toString();
-        }
-        return "No such bean: " + name;
-    }
-
-    public static final String hh_bean_ls = "# lists running beans";
-    public String ac_bean_ls(Args args)
-    {
-        String format = "%-30s %s\n";
-        try (Formatter s = new Formatter(new StringBuilder())) {
-            ConfigurableListableBeanFactory factory = _context.getBeanFactory();
-            s.format(format, "Bean", "Description");
-            s.format(format, "----", "-----------");
-            for (String name : factory.getBeanDefinitionNames()) {
-                if (!name.startsWith("org.springframework.")) {
-                    BeanDefinition definition = factory.getBeanDefinition(name);
-                    String description = definition.getDescription();
-                    s.format(format, name, (description != null ? description : "-"));
+            @Override
+            public String call()
+                    throws IOException, IllegalArgumentException, NoRouteToCellException
+            {
+                if ("none".equals(controller)) {
+                    controller = null;
+                    file = _setupFile;
+                } else if (file == null && controller == null) {
+                    controller = _setupController;
+                    file = _setupFile;
                 }
-            }
 
-            return s.toString();
+                checkArgument(file != null || controller != null,
+                              "Either a setup controller or setup file must be specified.");
+
+                if (controller != null) {
+                    checkState(!Strings.isNullOrEmpty(_setupClass),
+                               "Cannot save to a setup controller since the cell has no setup class.");
+
+                    try {
+                        StringWriter sw = new StringWriter();
+                        printSetup(new PrintWriter(sw));
+
+                        SetupInfoMessage info =
+                                new SetupInfoMessage("put", getCellName(),
+                                                     _setupClass, sw.toString());
+
+                        sendMessage(new CellMessage(new CellPath(controller), info));
+                    } catch (NoRouteToCellException e) {
+                        throw new NoRouteToCellException("Failed to send setup to " + controller + ": " + e.getMessage());
+                    }
+                }
+
+                if (file != null) {
+                    File path = file.getAbsoluteFile();
+                    File directory = path.getParentFile();
+                    File temp = File.createTempFile(path.getName(), null, directory);
+                    temp.deleteOnExit();
+
+                    try (PrintWriter pw = new PrintWriter(new FileWriter(temp))) {
+                        printSetup(pw);
+                    }
+
+
+                    renameWithBackup(temp, path);
+                }
+
+                return "";
+            }
+        }
+
+        @Command(name = "reload",
+                 hint = "reload service configuration",
+                 description = "This command destroys the current setup and replaces it " +
+                         "by the setup on disk.")
+        public class ReloadCommand implements Callable<String>
+        {
+            @Option(name = "yes", required = true,
+                    usage = "Confirms that the current setup should be destroyed and replaced " +
+                            "with the one on disk.")
+            boolean confirmed;
+
+            @Override
+            public String call() throws IOException, CommandException, IllegalArgumentException
+            {
+                checkArgument(confirmed, "Required option is missing.");
+                if (_setupFile != null && !_setupFile.exists()) {
+                    return String.format("Setup file [%s] does not exist", _setupFile);
+                }
+                executeSetup();
+                return "";
+            }
         }
     }
 
-    public static final String hh_bean_dep = "# shows bean dependencies";
-    public String ac_bean_dep(Args args)
+    @Command(name = "infox", hint = "show status information about bean")
+    public class InfoxCommand implements Callable<String>
     {
-        String format = "%-30s %s\n";
-        try (Formatter s = new Formatter(new StringBuilder())) {
-            s.format(format, "Bean", "Used by");
-            s.format(format, "----", "-------");
-            for (String name : getBeanNames()) {
-                s.format(format, name, Joiner.on(",").join(getDependentBeans(name)));
-            }
+        @Argument(metaVar = "bean")
+        String name;
 
-            return s.toString();
+        @Override
+        public String call()
+        {
+            Object bean = getBean(name);
+            if (CellInfoProvider.class.isInstance(bean)) {
+                StringWriter s = new StringWriter();
+                PrintWriter pw = new PrintWriter(s);
+                ((CellInfoProvider)bean).getInfo(pw);
+                return s.toString();
+            }
+            return "No such bean: " + name;
+        }
+    }
+
+    @Command(name = "bean ls", hint = "list running beans",
+             description = "Lists the bean in this service. Services are composed of components " +
+                     "called beans. Each bean implements a part of a service.")
+    public class BeanLsCommand implements Callable<String>
+    {
+        @Override
+        public String call()
+        {
+            String format = "%-30s %s\n";
+            try (Formatter s = new Formatter(new StringBuilder())) {
+                ConfigurableListableBeanFactory factory = _context.getBeanFactory();
+                s.format(format, "Bean", "Description");
+                s.format(format, "----", "-----------");
+                for (String name : factory.getBeanDefinitionNames()) {
+                    if (!name.startsWith("org.springframework.")) {
+                        BeanDefinition definition = factory.getBeanDefinition(name);
+                        String description = definition.getDescription();
+                        s.format(format, name,
+                                 (description != null ? description : "-"));
+                    }
+                }
+
+                return s.toString();
+            }
+        }
+    }
+
+    @Command(name = "bean dep", hint = "show bean dependencies",
+             description = "Shows dependencies between beans. This information is mostly useful " +
+                     "as a debugging aid.")
+    public class BeanDepCommand implements Callable<String>
+    {
+        @Override
+        public String call()
+        {
+            String format = "%-30s %s\n";
+            try (Formatter s = new Formatter(new StringBuilder())) {
+                s.format(format, "Bean", "Used by");
+                s.format(format, "----", "-------");
+                for (String name : getBeanNames()) {
+                    s.format(format, name, Joiner.on(",").join(getDependentBeans(name)));
+                }
+
+                return s.toString();
+            }
         }
     }
 
@@ -666,71 +670,55 @@ public class UniversalSpringCell
         return o;
     }
 
-    private CharSequence valueToString(Object value)
+    @Command(name = "bean properties", hint = "show properties of a bean",
+             description = "Shows the properties of a bean and their values. Each bean exposes " +
+                     "some properties that can be read with this command.")
+    public class BeanPropertiesCommand implements Callable<String>
     {
-        if (value == null) {
-            return "";
-        } else if (value.getClass().isArray()) {
-            Class<?> componentType = value.getClass().getComponentType();
-            if (componentType == Boolean.TYPE) {
-                return Arrays.toString((boolean[]) value);
-            } else if (componentType == Byte.TYPE) {
-                return Arrays.toString((byte[]) value);
-            } else if (componentType == Character.TYPE) {
-                return Arrays.toString((char[]) value);
-            } else if (componentType == Double.TYPE) {
-                return Arrays.toString((double[]) value);
-            } else if (componentType == Float.TYPE) {
-                return Arrays.toString((float[]) value);
-            } else if (componentType == Integer.TYPE) {
-                return Arrays.toString((int[]) value);
-            } else if (componentType == Long.TYPE) {
-                return Arrays.toString((long[]) value);
-            } else if (componentType == Short.TYPE) {
-                return Arrays.toString((short[]) value);
-            } else {
-                return Arrays.deepToString((Object[]) value);
-            }
-        } else {
-            return value.toString();
-        }
-    }
+        @Argument(metaVar = "bean", usage = "Name of bean or property reference.")
+        String name;
 
-    public static final String hh_bean_properties =
-        "<bean> # shows properties of a bean";
-    public String ac_bean_properties_$_1(Args args)
-    {
-        String name = args.argv(0);
-        Object o = getBeanProperty(name);
-        if (o != null) {
-            StringBuilder s = new StringBuilder();
-            BeanWrapper bean = new RestrictedBeanWrapper(o);
-            for (PropertyDescriptor p : bean.getPropertyDescriptors()) {
-                String property = p.getName();
-                if (bean.isReadableProperty(property)) {
-                    Object value = bean.getPropertyValue(property);
-                    s.append(property).append('=').append(valueToString(value));
-                    if (!bean.isWritableProperty(property)) {
-                        s.append(" [read-only]");
+        @Override
+        public String call()
+        {
+            Object o = getBeanProperty(name);
+            if (o != null) {
+                StringBuilder s = new StringBuilder();
+                BeanWrapper bean = new RestrictedBeanWrapper(o);
+                for (PropertyDescriptor p : bean.getPropertyDescriptors()) {
+                    String property = p.getName();
+                    if (bean.isReadableProperty(property)) {
+                        Object value = bean.getPropertyValue(property);
+                        s.append(property).append('=').append(org.dcache.commons.util.Strings.toString(value));
+                        if (!bean.isWritableProperty(property)) {
+                            s.append(" [read-only]");
+                        }
+                        s.append('\n');
                     }
                     s.append('\n');
                 }
+                return s.toString();
             }
-            return s.toString();
+            return "No such bean: " + name;
         }
-        return "No such bean: " + name;
     }
 
-    public static final String hh_bean_property =
-        "<property-name> # shows property of a bean";
-    public String ac_bean_property_$_1(Args args)
+    @Command(name = "bean property", hint = "show property of a bean")
+    public class BeanPropertyCommand implements Callable<String>
     {
-        String name = args.argv(0);
-        Object o = getBeanProperty(name);
-        return (o != null) ? String.valueOf(valueToString(o)) : ("No such bean: " + name);
+        @Argument(metaVar = "property")
+        String name;
+
+        @Override
+        public String call()
+        {
+            Object o = getBeanProperty(name);
+            return (o != null) ? org.dcache.commons.util.Strings.toMultilineString(o) : ("No such property: " + name);
+        }
     }
 
-    /** Returns a formated name of a message class. */
+
+    /** Returns a formatted name of a message class. */
     protected String getMessageName(Class<?> c)
     {
         String name = c.getSimpleName();
@@ -744,53 +732,57 @@ public class UniversalSpringCell
         return name;
     }
 
-    public static final String hh_bean_messages =
-        "[<bean>] # shows message types handled by beans";
-    public String ac_bean_messages_$_0_1(Args args)
+    @Command(name = "bean messages", hint = "show message types handled by beans",
+             description = "Shows messages processed by each bean. dCache services communicate " +
+                     "by message passing. Each bean may be able to handle zero or more messages and " +
+                     "this command shows which messages.")
+    public class BeanMessagesCommand implements Callable<String>
     {
-        switch (args.argc()) {
-        case 0:
-            Multimap<String,Class<? extends Serializable>> nameToClassMap = ArrayListMultimap.create();
-            for (String name: getBeanNames()) {
+        @Argument(required = false, metaVar = "bean",
+                  usage = "Bean name. If omitted, the information is displayed for all beans.")
+        String name;
+
+        @Override
+        public String call()
+        {
+            if (name == null) {
+                Multimap<String,Class<? extends Serializable>> nameToClassMap = ArrayListMultimap.create();
+                for (String name: getBeanNames()) {
+                    Object bean = getBean(name);
+                    if (CellMessageReceiver.class.isInstance(bean)) {
+                        Collection<Class<? extends Serializable>> types =
+                                _messageDispatcher.getMessageTypes(bean);
+                        nameToClassMap.putAll(name, types);
+                    }
+                }
+
+                Multimap<Class<? extends Serializable>,String> classToNameMap = Multimaps.invertFrom(
+                        nameToClassMap, ArrayListMultimap.<Class<? extends Serializable>,String>create());
+
+                final String format = "%-40s %s\n";
+                Formatter f = new Formatter(new StringBuilder());
+                f.format(format, "Message", "Receivers");
+                f.format(format, "-------", "---------");
+                for (Map.Entry<Class<? extends Serializable>,Collection<String>> e: classToNameMap.asMap().entrySet()) {
+                    f.format(format,
+                             getMessageName(e.getKey()),
+                             Joiner.on(",").join(e.getValue()));
+                }
+
+                return f.toString();
+            } else {
                 Object bean = getBean(name);
                 if (CellMessageReceiver.class.isInstance(bean)) {
+                    StringBuilder s = new StringBuilder();
                     Collection<Class<? extends Serializable>> types =
-                        _messageDispatcher.getMessageTypes(bean);
-                    nameToClassMap.putAll(name, types);
+                            _messageDispatcher.getMessageTypes(bean);
+                    for (Class<? extends Serializable> t : types) {
+                        s.append(getMessageName(t)).append('\n');
+                    }
+                    return s.toString();
                 }
+                return "No such bean: " + name;
             }
-
-            Multimap<Class<? extends Serializable>,String> classToNameMap = Multimaps.invertFrom(
-                    nameToClassMap, ArrayListMultimap.<Class<? extends Serializable>,String>create());
-
-            final String format = "%-40s %s\n";
-            Formatter f = new Formatter(new StringBuilder());
-            f.format(format, "Message", "Receivers");
-            f.format(format, "-------", "---------");
-            for (Map.Entry<Class<? extends Serializable>,Collection<String>> e: classToNameMap.asMap().entrySet()) {
-                f.format(format,
-                         getMessageName(e.getKey()),
-                         Joiner.on(",").join(e.getValue()));
-            }
-
-            return f.toString();
-
-        case 1:
-            String name = args.argv(0);
-            Object bean = getBean(name);
-            if (CellMessageReceiver.class.isInstance(bean)) {
-                StringBuilder s = new StringBuilder();
-                Collection<Class<? extends Serializable>> types =
-                    _messageDispatcher.getMessageTypes(bean);
-                for (Class<? extends Serializable> t : types) {
-                    s.append(getMessageName(t)).append('\n');
-                }
-                return s.toString();
-            }
-            return "No such bean: " + name;
-
-        default:
-            return "";
         }
     }
 
@@ -1036,89 +1028,134 @@ public class UniversalSpringCell
         return bean;
     }
 
-    class UniversalSpringCellApplicationContext
-        extends ClassPathXmlApplicationContext
+    private void createContext() throws CommandThrowableException
     {
-        UniversalSpringCellApplicationContext(Args args)
-        {
-            super(args.argv(0));
-        }
-
-        private ByteArrayResource getArgumentsResource()
-        {
-            Args args = new Args(getArgs());
-            args.shift();
-
-            Properties properties = new Properties();
-            for (Map.Entry<String, Object> entry : _environment.entrySet()) {
-                properties.setProperty(entry.getKey(), entry.getValue().toString());
-            }
-            for (Map.Entry<String, String> option : args.optionsAsMap().entrySet()) {
-                properties.setProperty(option.getKey(), option.getValue());
-            }
-            String arguments =
-                    args.toString().replaceAll("-\\$\\{[0-9]+\\}", "");
-            properties.setProperty("arguments", arguments);
-
-
-            /* Convert to byte array form such that we can make it
-             * available as a Spring resource.
-             */
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            try {
-                properties.store(out, "");
-            } catch (IOException e) {
-                /* This should never happen with a ByteArrayOutputStream.
-                 */
-                throw Throwables.propagate(e);
-            }
-            final byte[] _domainContext = out.toByteArray();
-
-            return new ByteArrayResource(_domainContext) {
-                /**
-                 * Fake file name to make
-                 * PropertyPlaceholderConfigurer happy.
-                 */
+        ClassPathXmlApplicationContext context;
+        Args args = getArgs();
+        try {
+            context = new ClassPathXmlApplicationContext();
+            context.setConfigLocations(new String[]{args.argv(0)});
+            context.addBeanFactoryPostProcessor(new BeanFactoryPostProcessor()
+            {
                 @Override
-                public String getFilename()
+                public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException
                 {
-                    return "arguments.properties";
-                }
-            };
-        }
+                    beanFactory.addBeanPostProcessor(UniversalSpringCell.this);            }
+            });
 
-        @Override
-        public Resource getResource(String location)
-        {
-            if (location.startsWith("arguments:")) {
-                return getArgumentsResource();
-            } else {
-                return super.getResource(location);
+            ConfigurableEnvironment environment = context.getEnvironment();
+            environment.getPropertySources().addFirst(
+                    new MapPropertySource("environment", _environment));
+            environment.getPropertySources().addFirst(
+                    new MapPropertySource("options", Maps.<String,Object>newHashMap(args.optionsAsMap())));
+            environment.getPropertySources().addFirst(
+                    new PropertySource<Object>("arguments")
+                    {
+                        private final String arguments;
+
+                        {
+                            Args args = new Args(getArgs());
+                            args.shift();
+                            arguments = args.toString().replaceAll("-\\$\\{[0-9]+\\}", "");
+                        }
+
+                        @Override
+                        public Object getProperty(String name)
+                        {
+                            return name.equals("arguments") ? arguments : null;
+                        }
+                    }
+            );
+            if (args.hasOption("profiles")) {
+                environment.setActiveProfiles(args.getOption("profiles").split(","));
             }
+            context.refresh();
+        } catch (BeanInstantiationException e) {
+            Throwable t = e.getMostSpecificCause();
+            Throwables.propagateIfPossible(t);
+            String msg = "Failed to instantiate class " + e.getBeanClass().getName() +
+                    ": " + t.getMessage();
+            throw new CommandThrowableException(msg, t);
+        } catch (BeanCreationException e) {
+            Throwable t = e.getMostSpecificCause();
+            Throwables.propagateIfPossible(t);
+            String msg = "Failed to create bean '" + e.getBeanName() +
+                    "' : " + t.getMessage();
+            throw new CommandThrowableException(msg, t);
         }
 
-        @Override
-        protected void customizeBeanFactory(DefaultListableBeanFactory beanFactory)
+        _context = context;
+    }
+
+    /**
+     * BeanWrapper that restricts access to certain private properties that should not be exposed.
+     */
+    private class RestrictedBeanWrapper extends BeanWrapperImpl
+    {
+        private RestrictedBeanWrapper(Object object)
         {
-            super.customizeBeanFactory(beanFactory);
-            beanFactory.addBeanPostProcessor(UniversalSpringCell.this);
+            super(object);
+        }
+
+        private RestrictedBeanWrapper(Object object, String nestedPath, Object rootObject)
+        {
+            super(object, nestedPath, rootObject);
         }
 
         @Override
-        public synchronized ConfigurableEnvironment getEnvironment() {
-            ConfigurableEnvironment environment = super.getEnvironment();
-
-            Args args = getArgs();
-
-            if(args.hasOption("profiles")) {
-                String[] profiles = args.getOption("profiles").split(",");
-
-                if(!Arrays.equals(profiles, environment.getActiveProfiles())) {
-                    environment.setActiveProfiles(profiles);
+        protected BeanWrapperImpl getBeanWrapperForPropertyPath(String propertyPath)
+        {
+            int pos = PropertyAccessorUtils.getFirstNestedPropertySeparatorIndex(propertyPath);
+            if (pos > -1) {
+                String nestedProperty = propertyPath.substring(0, pos);
+                if (!isReadableProperty(nestedProperty)) {
+                    throw new NotReadablePropertyException(getRootClass(), nestedProperty);
                 }
             }
+            return super.getBeanWrapperForPropertyPath(propertyPath);
+        }
 
-            return environment;
+        @Override
+        public boolean isReadableProperty(String propertyName)
+        {
+            if (isAllowedName(propertyName)) {
+                PropertyDescriptor pd = getPropertyDescriptorInternal(propertyName);
+                if (pd == null || pd.getReadMethod() != null && !pd.isHidden() && isAllowedType(pd.getPropertyType())) {
+                    try {
+                        Object value = super.getPropertyValue(propertyName);
+                        if (value == null || isAllowedType(value.getClass())) {
+                            return true;
+                        }
+                    } catch (InvalidPropertyException ignored) {
+                    }
+                }
+            }
+            return false;
+        }
+
+        private boolean isAllowedType(Class<?> clazz)
+        {
+            return !isAssignableTo(clazz, HIDDEN_TYPES);
+        }
+
+        private boolean isAllowedName(String propertyName)
+        {
+            String s = propertyName.toLowerCase();
+            return !s.contains("password") && !s.contains("username");
+        }
+
+        @Override
+        public Object getPropertyValue(String propertyName) throws BeansException
+        {
+            if (!isReadableProperty(propertyName)) {
+                throw new NotReadablePropertyException(getRootClass(), propertyName);
+            }
+            return super.getPropertyValue(propertyName);
+        }
+
+        @Override
+        protected BeanWrapperImpl newNestedBeanWrapper(Object object, String nestedPath) {
+            return new RestrictedBeanWrapper(object, nestedPath, this);
         }
     }
 

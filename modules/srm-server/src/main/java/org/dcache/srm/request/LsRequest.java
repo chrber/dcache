@@ -16,6 +16,7 @@ import org.dcache.srm.SRMUser;
 import org.dcache.srm.scheduler.FatalJobFailure;
 import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.scheduler.NonFatalJobFailure;
+import org.dcache.srm.scheduler.Scheduler;
 import org.dcache.srm.scheduler.State;
 import org.dcache.srm.util.RequestStatusTool;
 import org.dcache.srm.v2_2.ArrayOfTMetaDataPathDetail;
@@ -143,17 +144,29 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
         }
 
         @Override
-        public void schedule() throws InterruptedException,
-                IllegalStateTransition {
+        public Class<? extends Job> getSchedulerType()
+        {
+            return LsFileRequest.class;
+        }
 
-                // save this request in request storage unconditionally
-                // file requests will get stored as soon as they are
-                // scheduled, and the saved state needs to be consistent
+        @Override
+        public void scheduleWith(Scheduler scheduler) throws InterruptedException,
+                IllegalStateTransition
+        {
+            // save this request in request storage unconditionally
+            // file requests will get stored as soon as they are
+            // scheduled, and the saved state needs to be consistent
+            saveJob(true);
 
-                saveJob(true);
-                for (LsFileRequest request : getFileRequests()) {
-                        request.schedule();
-                }
+            for (LsFileRequest request : getFileRequests()) {
+                request.scheduleWith(scheduler);
+            }
+        }
+
+        @Override
+        public void onSrmRestart(Scheduler scheduler)
+        {
+            // Nothing to do.
         }
 
         @Override
@@ -227,10 +240,7 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
                 SrmLsResponse response = new SrmLsResponse();
                 response.setReturnStatus(getTReturnStatus());
                 if (!response.getReturnStatus().getStatusCode().isProcessing()) {
-                    ArrayOfTMetaDataPathDetail details =
-                        new ArrayOfTMetaDataPathDetail();
-                    details.setPathDetailArray(getPathDetailArray());
-                    response.setDetails(details);
+                    response.setDetails(new ArrayOfTMetaDataPathDetail(getPathDetailArray()));
                 } else {
                     response.setDetails(null);
                 }
@@ -240,12 +250,8 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
 
         public final SrmStatusOfLsRequestResponse getSrmStatusOfLsRequestResponse()
         {
-                SrmStatusOfLsRequestResponse response = new SrmStatusOfLsRequestResponse();
-                response.setReturnStatus(getTReturnStatus());
-                ArrayOfTMetaDataPathDetail details = new ArrayOfTMetaDataPathDetail();
-                details.setPathDetailArray(getPathDetailArray());
-                response.setDetails(details);
-                return response;
+                return new SrmStatusOfLsRequestResponse(
+                        getTReturnStatus(), new ArrayOfTMetaDataPathDetail(getPathDetailArray()));
         }
 
         private String getTRequestToken() {
@@ -551,4 +557,8 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
         return longFormat;
     }
 
+    @Override
+    public String getNameForRequestType() {
+        return "Ls";
+    }
 }

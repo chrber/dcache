@@ -8,14 +8,13 @@ onerror shutdown
 check -strong spacemanager.cell.name
 check -strong spacemanager.cell.export
 check -strong spacemanager.db.url
-check -strong spacemanager.db.driver
 check -strong spacemanager.db.user
 check -strong spacemanager.db.password
-check -strong spacemanager.db.connections.min
+check -strong spacemanager.db.connections.idle
 check -strong spacemanager.db.connections.max
 check -strong spacemanager.limits.threads
 check -strong spacemanager.default-access-latency
-check -strong spacemanager.enable.reserve-space-for-non-srm-transfers
+check -strong spacemanager.enable.unreserved-uploads-to-linkgroups
 check spacemanager.authz.link-group-file-name
 check -strong spacemanager.enable.space-reservation
 check -strong spacemanager.service.poolmanager

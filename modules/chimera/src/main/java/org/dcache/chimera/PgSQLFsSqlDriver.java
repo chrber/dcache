@@ -24,9 +24,11 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import org.dcache.chimera.posix.Stat;
 import org.dcache.commons.util.SqlHelper;
@@ -50,6 +52,19 @@ class PgSQLFsSqlDriver extends FsSqlDriver {
     protected PgSQLFsSqlDriver() {
         _log.info("Running PostgreSQL specific Driver");
     }
+
+    @Override
+    FsInode mkdir(Connection dbConnection, FsInode parent, String name, int owner, int group, int mode,
+                  Map<String, byte[]> tags) throws ChimeraFsException, SQLException
+    {
+        FsInode inode = mkdir(dbConnection, parent, name, owner, group, mode);
+        /* There is a trigger that copies tags on mkdir, but we don't want those tags.
+         */
+        removeTag(dbConnection, inode);
+        createTags(dbConnection, inode, owner, group, mode & 0666, tags);
+        return inode;
+    }
+
     private static final String sqlInode2Path = "SELECT inode2path(?)";
     private static final String sqlPath2Inode = "SELECT path2inode(?, ?)";
     private static final String sqlPath2Inodes = "SELECT ipnfsid,isize,inlink,itype,imode,iuid,igid,iatime,ictime,imtime from path2inodes(?, ?)";
@@ -244,6 +259,37 @@ class PgSQLFsSqlDriver extends FsSqlDriver {
 
         } finally {
             SqlHelper.tryToClose(stInserIntoParent);
+        }
+    }
+
+    private static final String ADD_INODE_LOCATION =
+            "INSERT INTO t_locationinfo (SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS " +
+                    "(SELECT 1 FROM T_LOCATIONINFO WHERE ipnfsid=? AND itype=? AND ilocation=?))";
+
+    @Override
+    void addInodeLocation(Connection dbConnection, FsInode inode, int type, String location) throws SQLException
+    {
+        Timestamp now = new Timestamp(System.currentTimeMillis());
+        try (PreparedStatement stAddInodeLocation = dbConnection.prepareStatement(ADD_INODE_LOCATION)) {
+            stAddInodeLocation.setString(1, inode.toString());
+            stAddInodeLocation.setInt(2, type);
+            stAddInodeLocation.setString(3, location);
+            stAddInodeLocation.setInt(4, 10); // default priority
+            stAddInodeLocation.setTimestamp(5, now);
+            stAddInodeLocation.setTimestamp(6, now);
+            stAddInodeLocation.setInt(7, 1); // online
+            stAddInodeLocation.setString(8, inode.toString());
+            stAddInodeLocation.setInt(9, type);
+            stAddInodeLocation.setString(10, location);
+            int n = stAddInodeLocation.executeUpdate();
+            if (n == 0) {
+                /*
+                 * no updates as such entry already exists.
+                 * To be compatible with others, throw corresponding
+                 * SQL exception.
+                 */
+                throw new SQLException("Entry already exists", DUPLICATE_KEY_ERROR);
+            }
         }
     }
 

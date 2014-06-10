@@ -5,6 +5,7 @@ import java.net.URISyntaxException;
 
 import org.dcache.srm.AbstractStorageElement;
 import org.dcache.srm.SRM;
+import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMFileRequestNotFoundException;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.SRMUser;
@@ -78,12 +79,12 @@ public class SrmAbortFiles
     private TReturnStatus abortSurl(ContainerRequest<?> request, org.apache.axis.types.URI surl)
     {
         try {
-            request.getFileRequestBySurl(new URI(surl.toString())).abort();
+            request.getFileRequestBySurl(new URI(surl.toString())).abort("File request aborted by client.");
             return new TReturnStatus(TStatusCode.SRM_SUCCESS, null);
         } catch (SRMFileRequestNotFoundException | URISyntaxException e) {
             return new TReturnStatus(TStatusCode.SRM_INVALID_PATH,
                     "SURL does match any existing file request associated with the request token");
-        } catch (IllegalStateTransition e) {
+        } catch (SRMException | IllegalStateTransition e) {
             return new TReturnStatus(TStatusCode.SRM_FAILURE, e.getMessage());
         }
     }

@@ -62,7 +62,6 @@ import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.services.login.LoginManagerChildrenInfo;
-import dmg.util.Args;
 
 import org.dcache.acl.enums.AccessType;
 import org.dcache.cells.CellStub;
@@ -74,6 +73,7 @@ import org.dcache.namespace.FileType;
 import org.dcache.namespace.PermissionHandler;
 import org.dcache.namespace.PosixPermissionHandler;
 import org.dcache.poolmanager.PoolMonitor;
+import org.dcache.util.Args;
 import org.dcache.util.Checksum;
 import org.dcache.util.FireAndForgetTask;
 import org.dcache.util.PingMoversTask;
@@ -748,7 +748,7 @@ public class XrootdDoor
             PoolMoverKillMessage killMessage =
                 new PoolMoverKillMessage(pool, moverId);
             killMessage.setReplyRequired(false);
-            _poolStub.send(new CellPath(pool), killMessage);
+            _poolStub.notify(new CellPath(pool), killMessage);
         } catch (NoRouteToCellException e) {
             _log.error("Failed to kill mover {}/{}: {}", pool, moverId, e.getMessage());
         }

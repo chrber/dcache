@@ -3,6 +3,8 @@ package org.dcache.pool.repository.v5;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.concurrent.GuardedBy;
+
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,10 +28,9 @@ import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.UnitInteger;
 import diskCacheV111.vehicles.PnfsAddCacheLocationMessage;
 
-import dmg.util.Args;
-
 import dmg.cells.nucleus.AbstractCellComponent;
 import dmg.cells.nucleus.CellCommandListener;
+
 import org.dcache.pool.FaultAction;
 import org.dcache.pool.FaultEvent;
 import org.dcache.pool.FaultListener;
@@ -52,6 +53,7 @@ import org.dcache.pool.repository.StateChangeEvent;
 import org.dcache.pool.repository.StateChangeListener;
 import org.dcache.pool.repository.StickyChangeEvent;
 import org.dcache.pool.repository.StickyRecord;
+import org.dcache.util.Args;
 import org.dcache.util.CacheExceptionFactory;
 import org.dcache.vehicles.FileAttributes;
 
@@ -362,7 +364,7 @@ public class CacheRepositoryV5
 
             updateAccountSize();
 
-            /* State change notifications are supressed while the
+            /* State change notifications are suppressed while the
              * repository is loading. We synchronize to ensure a clean
              * switch from the LOADING state to the OPEN state.
              */
@@ -373,12 +375,15 @@ public class CacheRepositoryV5
                 _log.info("Registering files in sweeper");
                 Collections.sort(entries, new MetaDataLRUOrder());
                 for (MetaDataRecord entry: entries) {
-                    stateChanged(entry, NEW, entry.getState());
+                    synchronized (entry) {
+                        CacheEntry cacheEntry = new CacheEntryImpl(entry);
+                        stateChanged(cacheEntry, cacheEntry, NEW, entry.getState());
+                    }
                 }
 
-                _log.info(String.format("Inventory contains %d files; total size is %d; used space is %d; free space is %d.",
-                                        entries.size(), _account.getTotal(),
-                                        usedDataSpace, _account.getFree()));
+                _log.info("Inventory contains {} files; total size is {}; used space is {}; free space is {}.",
+                          entries.size(), _account.getTotal(),
+                          usedDataSpace, _account.getFree());
 
                 _state = State.OPEN;
             }
@@ -507,9 +512,13 @@ public class CacheRepositoryV5
                      * loading; at the end of the load method
                      * listeners are informed about all entries.
                      */
-                    entry.touch();
-                    if (_state == State.OPEN) {
-                        accessTimeChanged(entry);
+                    synchronized (entry) {
+                        CacheEntry oldEntry = new CacheEntryImpl(entry);
+                        entry.touch();
+                        if (_state == State.OPEN) {
+                            CacheEntryImpl newEntry = new CacheEntryImpl(entry);
+                            accessTimeChanged(oldEntry, newEntry);
+                        }
                     }
                 }
             }
@@ -758,69 +767,61 @@ public class CacheRepositoryV5
 
     // Operations on MetaDataRecord ///////////////////////////////////////
 
-    protected void updateRemovable(MetaDataRecord entry)
+    @GuardedBy("getMetaDataRecord(entry.getPnfsid())")
+    protected void updateRemovable(CacheEntry entry)
     {
-        synchronized (entry) {
             PnfsId id = entry.getPnfsId();
             if (_sweeper.isRemovable(entry)) {
                 if (_removable.add(id)) {
-                    _account.adjustRemovable(entry.getSize());
+                    _account.adjustRemovable(entry.getReplicaSize());
                 }
             } else {
                 if (_removable.remove(id)) {
-                    _account.adjustRemovable(-entry.getSize());
+                    _account.adjustRemovable(-entry.getReplicaSize());
                 }
             }
-        }
     }
 
     /**
      * Asynchronously notify listeners about a state change.
      */
-    protected void stateChanged(MetaDataRecord entry,
+    @GuardedBy("getMetaDataRecord(newEntry.getPnfsid())")
+    protected void stateChanged(CacheEntry oldEntry, CacheEntry newEntry,
                                 EntryState oldState, EntryState newState)
     {
-        synchronized (entry) {
-            updateRemovable(entry);
-            StateChangeEvent event =
-                new StateChangeEvent(new CacheEntryImpl(entry),
-                                     oldState, newState);
-            _stateChangeListeners.stateChanged(event);
+        updateRemovable(newEntry);
+        StateChangeEvent event =
+            new StateChangeEvent(oldEntry, newEntry, oldState, newState);
+        _stateChangeListeners.stateChanged(event);
 
-            if (oldState != PRECIOUS && newState == PRECIOUS) {
-                _account.adjustPrecious(entry.getSize());
-            } else if (oldState == PRECIOUS && newState != PRECIOUS) {
-                _account.adjustPrecious(-entry.getSize());
-            }
+        if (oldState != PRECIOUS && newState == PRECIOUS) {
+            _account.adjustPrecious(newEntry.getReplicaSize());
+        } else if (oldState == PRECIOUS && newState != PRECIOUS) {
+            _account.adjustPrecious(-newEntry.getReplicaSize());
         }
     }
 
     /**
      * Asynchronously notify listeners about an access time change.
      */
-    protected void accessTimeChanged(MetaDataRecord entry)
+    @GuardedBy("getMetaDataRecord(newEntry.getPnfsid())")
+    protected void accessTimeChanged(CacheEntry oldEntry, CacheEntry newEntry)
     {
-        synchronized (entry) {
-            updateRemovable(entry);
-            EntryChangeEvent event =
-                    new EntryChangeEvent(new CacheEntryImpl(entry));
-            _stateChangeListeners.accessTimeChanged(event);
-        }
+        updateRemovable(newEntry);
+        EntryChangeEvent event = new EntryChangeEvent(oldEntry, newEntry);
+        _stateChangeListeners.accessTimeChanged(event);
     }
 
     /**
      * Asynchronously notify listeners about a change of a sticky
      * record.
      */
-    protected void stickyChanged(MetaDataRecord entry,
-                                 StickyRecord record)
+    @GuardedBy("getMetaDataRecord(newEntry.getPnfsid())")
+    protected void stickyChanged(CacheEntry oldEntry, CacheEntry newEntry, StickyRecord record)
     {
-        synchronized (entry) {
-            updateRemovable(entry);
-            StickyChangeEvent event =
-                    new StickyChangeEvent(new CacheEntryImpl(entry), record);
-            _stateChangeListeners.stickyChanged(event);
-        }
+        updateRemovable(newEntry);
+        StickyChangeEvent event = new StickyChangeEvent(oldEntry, newEntry, record);
+        _stateChangeListeners.stickyChanged(event);
     }
 
     /**
@@ -837,6 +838,8 @@ public class CacheRepositoryV5
                 return;
             }
 
+            CacheEntry oldEntry = new CacheEntryImpl(entry);
+
             try {
                 entry.setState(state);
             } catch (CacheException e) {
@@ -844,7 +847,8 @@ public class CacheRepositoryV5
                 throw new RuntimeException("Internal repository error", e);
             }
 
-            stateChanged(entry, oldState, state);
+            CacheEntryImpl newEntry = new CacheEntryImpl(entry);
+            stateChanged(oldEntry, newEntry, oldState, state);
 
             if (state == REMOVED) {
                 if (_log.isInfoEnabled()) {
@@ -886,9 +890,10 @@ public class CacheRepositoryV5
             }
 
             synchronized (entry) {
-                if (entry.setSticky(owner, expire, overwrite) &&
-                    _state == State.OPEN) {
-                    stickyChanged(entry, new StickyRecord(owner, expire));
+                CacheEntry oldEntry = new CacheEntryImpl(entry);
+                if (entry.setSticky(owner, expire, overwrite) && _state == State.OPEN) {
+                    CacheEntryImpl newEntry = new CacheEntryImpl(entry);
+                    stickyChanged(oldEntry, newEntry, new StickyRecord(owner, expire));
                     scheduleExpirationTask(entry);
                 }
             }
@@ -964,9 +969,11 @@ public class CacheRepositoryV5
     private void removeExpiredStickyFlags(MetaDataRecord entry)
     {
         synchronized (entry) {
+            CacheEntry oldEntry = new CacheEntryImpl(entry);
             List<StickyRecord> removed = entry.removeExpiredStickyFlags();
             for (StickyRecord record: removed) {
-                stickyChanged(entry, record);
+                CacheEntryImpl newEntry = new CacheEntryImpl(entry);
+                stickyChanged(oldEntry, newEntry, record);
             }
             scheduleExpirationTask(entry);
         }

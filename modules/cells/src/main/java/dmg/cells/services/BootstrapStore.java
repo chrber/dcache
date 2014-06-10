@@ -16,9 +16,9 @@ import dmg.cells.nucleus.ExceptionEvent;
 import dmg.cells.nucleus.KillEvent;
 import dmg.cells.nucleus.LastMessageEvent;
 import dmg.cells.nucleus.MessageEvent;
-import dmg.util.Args;
 import dmg.util.Gate;
 
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 
 /**
@@ -87,8 +87,8 @@ public class BootstrapStore implements Cell {
                  }
                  msg.setMessageObject( answer ) ;
                  msg.revertDirection() ;
-                 _nucleus.sendMessage( msg ) ;
-                 _answeredRequests ++ ;
+                  _nucleus.sendMessage(msg, true, true);
+                  _answeredRequests ++ ;
               }catch(Exception mse ){
                  _log.info( "messageArrived : Problem with "+
                                args.argv(1)+" -> "+mse ) ;

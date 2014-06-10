@@ -1,6 +1,7 @@
 package org.dcache.srm.request;
 
 
+import com.google.common.collect.Iterables;
 import org.apache.axis.types.UnsignedLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,7 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
         private static final Logger logger =
                 LoggerFactory.getLogger(LsFileRequest.class);
         private static final String SFN_STRING="SFN=";
-        private URI surl;
+        private final URI surl;
         private TMetaDataPathDetail metaDataPathDetail;
         private static final Comparator<FileMetaData> DIRECTORY_LAST_ORDER =
                 new Comparator<FileMetaData>() {
@@ -168,7 +169,9 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                 t0=System.currentTimeMillis();
                         }
 
-                        if (SRM.getSRM().isFileBusy(surl)) {
+                        PutFileRequest request =
+                            Iterables.getFirst(SRM.getSRM().getActiveFileRequests(PutFileRequest.class, surl), null);
+                        if (request != null) {
                             // [SRM 2.2, 4.4.3]
                             //
                             // SRM_FILE_BUSY
@@ -176,13 +179,18 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                             //     client requests for a file which there is an active
                             //     srmPrepareToPut (no srmPutDone is yet called) request for.
                             try {
+                                FileMetaData fmd = getStorage().getFileMetaData(getUser(),
+                                                                                surl,
+                                                                                request.getFileId());
                                 metaDataPathDetail =
-                                        getMetaDataPathDetail(surl, 0, 0, 0, 0, parent.getLongFormat());
+                                        convertFileMetaDataToTMetaDataPathDetail(surl,
+                                                                                 fmd,
+                                                                                 parent.getLongFormat());
                             } catch (SRMInvalidPathException e) {
                                 metaDataPathDetail = new TMetaDataPathDetail();
-                                metaDataPathDetail.setPath(getPath(surl));
                                 metaDataPathDetail.setType(TFileType.FILE);
                             }
+                            metaDataPathDetail.setPath(getPath(surl));
                             metaDataPathDetail.setStatus(new TReturnStatus(TStatusCode.SRM_FILE_BUSY,
                                     "The requested SURL is locked by an upload."));
                         } else {
@@ -213,27 +221,22 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                 if (e instanceof SRMInternalErrorException) {
                                         status = new TReturnStatus(TStatusCode.SRM_FAILURE,
                                                                    msg);
-                                        setStatusCode(TStatusCode.SRM_FAILURE);
                                 }
                                 else if (e instanceof SRMTooManyResultsException) {
                                         status = new TReturnStatus(TStatusCode.SRM_TOO_MANY_RESULTS,
                                                                    msg);
-                                        setStatusCode(TStatusCode.SRM_TOO_MANY_RESULTS);
                                 }
                                 else if (e instanceof SRMAuthorizationException) {
                                         status =  new TReturnStatus(TStatusCode.SRM_AUTHORIZATION_FAILURE,
                                                                     msg);
-                                        setStatusCode(TStatusCode.SRM_AUTHORIZATION_FAILURE);
                                 }
                                 else if (e instanceof SRMInvalidPathException) {
                                         status = new TReturnStatus(TStatusCode.SRM_INVALID_PATH,
                                                                    msg);
-                                        setStatusCode(TStatusCode.SRM_INVALID_PATH);
                                 }
                                 else if (e instanceof DataAccessException) {
                                     status = new TReturnStatus(TStatusCode.SRM_INTERNAL_ERROR,
                                             msg);
-                                    setStatusCode(TStatusCode.SRM_INTERNAL_ERROR);
                                 }
                                 else {
                                         if (e instanceof RuntimeException) {
@@ -241,11 +244,11 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                         }
                                         status = new TReturnStatus(TStatusCode.SRM_FAILURE,
                                                                    msg);
-                                        setStatusCode(TStatusCode.SRM_FAILURE);
                                 }
                                 metaDataPathDetail =  new TMetaDataPathDetail();
                                 metaDataPathDetail.setPath(getPath(surl));
                                 metaDataPathDetail.setStatus(status);
+                                setStatusCode(status.getStatusCode());
                                 setState(State.FAILED, msg);
                         }
                         catch(IllegalStateTransition ist) {
@@ -287,6 +290,7 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                 case RUNNING:
                 case RQUEUED:
                 case ASYNCWAIT:
+                case PRIORITYTQUEUED:
                     return new TReturnStatus(TStatusCode.SRM_REQUEST_INPROGRESS, description);
                 default:
                     return new TReturnStatus(TStatusCode.SRM_REQUEST_QUEUED, description);
@@ -304,7 +308,13 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
         }
 
         public TMetaDataPathDetail getMetaDataPathDetail() {
+            if (metaDataPathDetail != null) {
                 return metaDataPathDetail;
+            }
+            TMetaDataPathDetail detail =  new TMetaDataPathDetail();
+            detail.setPath(getPath(surl));
+            detail.setStatus(getReturnStatus());
+            return detail;
         }
 
         public final TMetaDataPathDetail getMetaDataPathDetail(URI surl,
@@ -321,7 +331,6 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                 TMetaDataPathDetail aMetaDataPathDetail=
                         convertFileMetaDataToTMetaDataPathDetail(surl,
                                                                  fmd,
-                                                                 depth,
                                                                  longFormat);
                 if(!getContainerRequest().increaseResultsNumAndContinue()) {
                         return aMetaDataPathDetail;
@@ -380,7 +389,6 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                         TMetaDataPathDetail dirMetaDataPathDetail=
                                 convertFileMetaDataToTMetaDataPathDetail(subpath,
                                                                          md,
-                                                                         1,
                                                                          longFormat);
                         if (!getContainerRequest().shouldSkipThisRecord()) {
                                 metadataPathDetailList.add(dirMetaDataPathDetail);
@@ -466,7 +474,6 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                 dirMetaDataPathDetail=
                                         convertFileMetaDataToTMetaDataPathDetail(subpath,
                                                                                  md,
-                                                                                 depth,
                                                                                  longFormat);
                         }
                         else {
@@ -479,7 +486,7 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                         }
                                         dirMetaDataPathDetail=convertFileMetaDataToTMetaDataPathDetail(subpath,
                                                                                                        fileMetaData,
-                                                                                                       depth, longFormat);
+                                                                                                       longFormat);
                                 }
                                 else {
                                         //
@@ -487,7 +494,6 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
                                         //
                                         dirMetaDataPathDetail=convertFileMetaDataToTMetaDataPathDetail(subpath,
                                                                                                        fileMetaData,
-                                                                                                       depth,
                                                                                                        false);
                                 }
                         }
@@ -578,32 +584,32 @@ public final class LsFileRequest extends FileRequest<LsRequest> {
         }
 
         @Override
-        public void toString(StringBuilder sb, boolean longformat) {
-                sb.append(" LsFileRequest ");
-                sb.append(" id:").append(getId());
-                sb.append(" priority:").append(getPriority());
-                sb.append(" creator priority:");
-                try {
-                        sb.append(getUser().getPriority());
+        public void toString(StringBuilder sb, String padding, boolean longformat) {
+                sb.append(padding);
+                if (padding.isEmpty()) {
+                    sb.append("Ls ");
                 }
-                catch (SRMInvalidRequestException ire) {
-                        sb.append("Unknown");
+                sb.append("file id:").append(getId());
+                if (getPriority() != 0) {
+                    sb.append(" priority:").append(getPriority());
                 }
                 State state = getState();
                 sb.append(" state:").append(state);
                 if(longformat) {
-                        sb.append('\n').append("   SURL: ").append(getSurl());
-                        sb.append('\n').append("   status code:").append(getStatusCode());
-                        sb.append('\n').append("   error message:").append(getErrorMessage());
-                        sb.append('\n').append("   History of State Transitions: \n");
-                        sb.append(getHistory());
+                        sb.append('\n');
+                        sb.append(padding).append("   SURL: ").append(getSurl()).append('\n');
+                        TStatusCode status = getStatusCode();
+                        if (status != null) {
+                            sb.append(padding).append("   Status:").append(status).append('\n');
+                        }
+                        sb.append(padding).append("   History of State Transitions:\n");
+                        sb.append(getHistory(padding + "   "));
                 }
         }
 
         private TMetaDataPathDetail
                 convertFileMetaDataToTMetaDataPathDetail(final URI path,
                                                          final FileMetaData fmd,
-                                                         final int depth,
                                                          final boolean verbose)
                 throws SRMException {
                 TMetaDataPathDetail metaDataPathDetail =

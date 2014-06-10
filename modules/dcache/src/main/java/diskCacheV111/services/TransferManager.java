@@ -2,14 +2,16 @@
 package diskCacheV111.services;
 
 import com.google.common.base.Strings;
-import com.jolbox.bonecp.BoneCPDataSource;
+import com.google.common.collect.Maps;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.datanucleus.api.jdo.JDOPersistenceManagerFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import javax.jdo.JDOHelper;
 import javax.jdo.PersistenceManager;
-import javax.jdo.PersistenceManagerFactory;
 import javax.jdo.Transaction;
 
 import java.io.PrintWriter;
@@ -23,11 +25,15 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import diskCacheV111.util.CacheException;
+import diskCacheV111.util.MessageEventTimer;
 import diskCacheV111.util.Pgpass;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.vehicles.DoorTransferFinishedMessage;
@@ -37,12 +43,17 @@ import diskCacheV111.vehicles.transferManager.TransferManagerMessage;
 
 import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellPath;
-import dmg.util.Args;
 
 import org.dcache.cells.AbstractCell;
+import org.dcache.cells.CellStub;
 import org.dcache.srm.request.sql.RequestsPropertyStorage;
 import org.dcache.srm.scheduler.JobIdGenerator;
 import org.dcache.srm.scheduler.JobIdGeneratorFactory;
+import org.dcache.util.Args;
+import org.dcache.util.CDCExecutorServiceDecorator;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * Base class for services that transfer files on behalf of SRM. Used to
@@ -52,7 +63,6 @@ public abstract class TransferManager extends AbstractCell
 {
     private static final Logger log = LoggerFactory.getLogger(TransferManager.class);
     private String _jdbcUrl = "jdbc:postgresql://localhost/srmdcache";
-    private String _jdbcDriver = "org.postgresql.Driver";
     private String _user = "srmdcache";
     private String _pass;
     private String _pwdFile;
@@ -61,15 +71,13 @@ public abstract class TransferManager extends AbstractCell
             new ConcurrentHashMap<>();
     private int _maxTransfers;
     private int _numTransfers;
-    private long _poolTimeout;
-    private long _poolManagerTimeout;
-    private long _pnfsManagerTimeout;
     private long _moverTimeout;
     protected static long nextMessageID;
     private String _tLogRoot;
-    protected String _poolManager;
-    protected String _pnfsManager;
-    private CellPath _poolMgrPath;
+    private final CellStub _pnfsManager;
+    private final CellStub _poolManager;
+    private final CellStub _poolStub;
+    private final CellStub _billingStub;
     private boolean _overwrite;
     private boolean _doDatabaseLogging;
     private int _maxNumberOfDeleteRetries;
@@ -79,9 +87,12 @@ public abstract class TransferManager extends AbstractCell
     private final Map<Long, TimerTask> _moverTimeoutTimerTasks =
             new ConcurrentHashMap<>();
     private String _ioQueueName; // multi io queue option
+    private HikariDataSource ds;
     private JobIdGenerator idGenerator;
     public final Set<PnfsId> justRequestedIDs = new HashSet<>();
     private String _poolProxy;
+    private ExecutorService executor =
+            new CDCExecutorServiceDecorator<>(Executors.newCachedThreadPool());
 
     /**
      * Creates a new instance of Class
@@ -90,6 +101,10 @@ public abstract class TransferManager extends AbstractCell
             throws InterruptedException, ExecutionException
     {
         super(cellName, args);
+        _poolManager = new CellStub(this);
+        _pnfsManager = new CellStub(this);
+        _poolStub = new CellStub(this);
+        _billingStub = new CellStub(this, new CellPath("billing"));
         doInit();
     }
 
@@ -99,7 +114,6 @@ public abstract class TransferManager extends AbstractCell
         Args args = getArgs();
 
         _jdbcUrl = args.getOpt("jdbcUrl");
-        _jdbcDriver = args.getOpt("jdbcDriver");
         _user = args.getOpt("dbUser");
         _pass = args.getOpt("dbPass");
         _pwdFile = args.getOpt("pgPass");
@@ -118,54 +132,24 @@ public abstract class TransferManager extends AbstractCell
         }
 
         try {
-            if (_jdbcUrl != null && _jdbcDriver != null && _user != null && _pass != null) {
+            if (_jdbcUrl != null && _user != null && _pass != null) {
                 initIdGenerator();
             } else {
                 idGenerator = null;
             }
         } catch (Exception e) {
             log.error("Failed to initialize Data Base connection to generate nextTransferId using default values");
-            log.error("jdbcUrl=" + _jdbcUrl + " jdbcDriver=" + _jdbcDriver + " dbUser=" + _user + " dbPass=" + _pass + " pgPass=" + _pwdFile);
+            log.error("jdbcUrl=" + _jdbcUrl + " dbUser=" + _user + " dbPass=" + _pass + " pgPass=" + _pwdFile);
             idGenerator = null;
             //logString.error(e);
         }
 
         if (doDbLogging()) {
             try {
-                Properties properties = new Properties();
-                properties.setProperty("javax.jdo.PersistenceManagerFactoryClass",
-                        "org.datanucleus.api.jdo.JDOPersistenceManagerFactory");
-                properties.setProperty("javax.jdo.option.ConnectionDriverName", _jdbcDriver);
-                properties.setProperty("javax.jdo.option.ConnectionURL", _jdbcUrl);
-                properties.setProperty("javax.jdo.option.ConnectionUserName", _user);
-                properties.setProperty("javax.jdo.option.ConnectionPassword", _pass);
-                properties.setProperty("javax.jdo.option.DetachAllOnCommit", "true");
-                properties.setProperty("javax.jdo.option.Optimistic", "true");
-                properties.setProperty("javax.jdo.option.NontransactionalRead", "true");
-                // 		properties.setProperty("javax.jdo.option.NontransactionalWrite","true");
-                properties.setProperty("javax.jdo.option.RetainValues", "true");
-                properties.setProperty("javax.jdo.option.Multithreaded", "true");
-                //   javax.jdo.option.Optimistic: false
-                //   javax.jdo.option.RetainValues: false
-                //   javax.jdo.option.NontransactionalRead: true
-                //   javax.jdo.option.NontransactionalWrite: false
-                //   javax.jdo.option.RestoreValues: false
-                //   javax.jdo.option.IgnoreCache: false
-                //   javax.jdo.option.Multithreaded: false
-                properties.setProperty("datanucleus.autoCreateSchema", "true");
-                properties.setProperty("datanucleus.validateTables", "false");
-                properties.setProperty("datanucleus.validateConstraints", "false");
-                properties.setProperty("datanucleus.autoCreateColumns", "true");
-
-                // below is default, supported are "LowerCase", "PreserveCase"
-                //  properties.setProperty("datanucleus.identifier.case","UpperCase");
-
-                PersistenceManagerFactory pmf =
-                        JDOHelper.getPersistenceManagerFactory(properties);
-                _pm = pmf.getPersistenceManager();
+                _pm = createPersistenceManager();
             } catch (Exception e) {
                 log.error("Failed to initialize Data Base connection using default values");
-                log.error("jdbcUrl=" + _jdbcUrl + " jdbcDriver=" + _jdbcDriver + " dbUser=" + _user + " dbPass=" + _pass + " pgPass=" + _pwdFile);
+                log.error("jdbcUrl=" + _jdbcUrl + " dbUser=" + _user + " dbPass=" + _pass + " pgPass=" + _pwdFile);
                 log.error(e.toString());
                 _pm = null;
                 setDbLogging(false);
@@ -174,38 +158,42 @@ public abstract class TransferManager extends AbstractCell
 
         _tLogRoot = Strings.emptyToNull(args.getOpt("tlog"));
         _maxNumberOfDeleteRetries = args.getIntOption("maxNumberOfDeleteRetries");
-        _poolManagerTimeout = TimeUnit.MILLISECONDS.convert(args.getIntOption("pool_manager_timeout"),
-                TimeUnit.valueOf(args.getOpt("pool_manager_timeout_unit")));
-        _pnfsManagerTimeout = TimeUnit.MILLISECONDS.convert(args.getIntOption("pnfs_timeout"),
-                TimeUnit.valueOf(args.getOpt("pnfs_timeout_unit")));
-        _poolTimeout = TimeUnit.MILLISECONDS.convert(args.getIntOption("pool_timeout"),
-                TimeUnit.valueOf(args.getOpt("pool_timeout_unit")));
+        _poolStub.setTimeout(args.getIntOption("pool_timeout"));
+        _poolStub.setTimeoutUnit(TimeUnit.valueOf(args.getOpt("pool_timeout_unit")));
         _maxTransfers = args.getIntOption("max_transfers");
         _overwrite = Strings.nullToEmpty(args.getOpt("overwrite")).equalsIgnoreCase("true");
-        _poolManager = args.getOpt("poolManager");
-        _pnfsManager = args.getOpt("pnfsManager");
-        _moverTimeout = TimeUnit.MILLISECONDS.convert(args.getIntOption("mover_timeout"),
-                TimeUnit.valueOf(args.getOpt("mover_timeout_unit")));
+        _poolManager.setDestination(args.getOpt("poolManager"));
+        _poolManager.setTimeout(args.getIntOption("pool_manager_timeout"));
+        _poolManager.setTimeoutUnit(TimeUnit.valueOf(args.getOpt("pool_manager_timeout_unit")));
+        _pnfsManager.setDestination(args.getOpt("pnfsManager"));
+        _pnfsManager.setTimeout(args.getIntOption("pnfs_timeout"));
+        _pnfsManager.setTimeoutUnit(TimeUnit.valueOf(args.getOpt("pnfs_timeout_unit")));
+
+        _moverTimeout = MILLISECONDS.convert(args.getIntOption("mover_timeout"),
+                                             TimeUnit.valueOf(args.getOpt("mover_timeout_unit")));
         _ioQueueName = Strings.emptyToNull(args.getOpt("io-queue"));
         _poolProxy = args.getOpt("poolProxy");
         log.debug("Pool Proxy " + (_poolProxy == null ? "not set" : ("set to " + _poolProxy)));
-        _poolMgrPath = new CellPath(_poolManager);
+    }
+
+    @Override
+    public void cleanUp()
+    {
+        super.cleanUp();
+        if (ds != null) {
+            ds.shutdown();
+        }
+        executor.shutdown();
     }
 
     private void initIdGenerator()
     {
         try {
-            final BoneCPDataSource ds = new BoneCPDataSource();
-            ds.setDriverClass(_jdbcDriver);
-            ds.setJdbcUrl(_jdbcUrl);
-            ds.setUsername(_user);
-            ds.setPassword(_pass);
-            ds.setIdleConnectionTestPeriodInMinutes(60);
-            ds.setIdleMaxAgeInMinutes(240);
-            ds.setMaxConnectionsPerPartition(50);
-            ds.setPartitionCount(1);
-            ds.setAcquireIncrement(5);
-            ds.setStatementsCacheSize(100);
+            HikariConfig config = new HikariConfig();
+            config.setDataSource(new DriverManagerDataSource(_jdbcUrl, _user, _pass));
+            config.setMaximumPoolSize(50);
+            config.setMinimumIdle(1);
+            ds = new HikariDataSource(config);
 
             RequestsPropertyStorage.initPropertyStorage(
                     new DataSourceTransactionManager(ds), ds, "srmnextrequestid");
@@ -222,7 +210,6 @@ public abstract class TransferManager extends AbstractCell
         pw.printf("    %s\n", getClass().getName());
         pw.println("---------------------------------");
         pw.printf("Name   : %s\n", getCellName());
-        pw.printf("jdbcClass : %s\n", _jdbcDriver);
         pw.printf("jdbcUrl : %s\n", _jdbcUrl);
         pw.printf("jdbcUser : %s\n", _user);
         if (doDbLogging()) {
@@ -238,9 +225,9 @@ public abstract class TransferManager extends AbstractCell
         pw.printf("number of active transfers : %d\n", _numTransfers);
         pw.printf("max number of active transfers  : %d\n", getMaxTransfers());
         pw.printf("PoolManager  : %s\n", _poolManager);
-        pw.printf("PoolManager timeout : %d seconds\n", _poolManagerTimeout);
-        pw.printf("PnfsManager timeout : %d seconds\n", _pnfsManagerTimeout);
-        pw.printf("Pool timeout  : %d seconds\n", _poolTimeout);
+        pw.printf("PoolManager timeout : %d seconds\n", MILLISECONDS.toSeconds(_poolManager.getTimeoutInMillis()));
+        pw.printf("PnfsManager timeout : %d seconds\n", MILLISECONDS.toSeconds(_pnfsManager.getTimeoutInMillis()));
+        pw.printf("Pool timeout  : %d seconds\n", MILLISECONDS.toSeconds(_poolStub.getTimeoutInMillis()));
         pw.printf("next id  : %d seconds\n", nextMessageID);
         pw.printf("io-queue  : %s\n", _ioQueueName);
         pw.printf("maxNumberofDeleteRetries  : %d\n", _maxNumberOfDeleteRetries);
@@ -264,31 +251,10 @@ public abstract class TransferManager extends AbstractCell
             return "unrecognized value : \"" + logString + "\" only true or false are allowed";
         }
         if (doDbLogging() == true && _pm == null) {
-            sb.append(getCellName())
-                    .append(" has been started w/ db logging disabed\n");
-            sb.append("Attempting to initialize JDO Peristsency Manager using parameters provided at startup\n");
+            sb.append(getCellName()).append(" has been started w/ db logging disabled\n");
+            sb.append("Attempting to initialize JDO Persistence Manager using parameters provided at startup\n");
             try {
-                Properties properties = new Properties();
-                properties.setProperty("javax.jdo.PersistenceManagerFactoryClass",
-                        "org.datanucleus.api.jdo.JDOPersistenceManagerFactory");
-                properties.setProperty("javax.jdo.option.ConnectionDriverName", _jdbcDriver);
-                properties.setProperty("javax.jdo.option.ConnectionURL", _jdbcUrl);
-                properties.setProperty("javax.jdo.option.ConnectionUserName", _user);
-                properties.setProperty("javax.jdo.option.ConnectionPassword", _pass);
-                properties.setProperty("javax.jdo.option.DetachAllOnCommit", "true");
-                properties.setProperty("javax.jdo.option.Optimistic", "true");
-                properties.setProperty("javax.jdo.option.NontransactionalRead", "true");
-                properties.setProperty("javax.jdo.option.RetainValues", "true");
-                properties.setProperty("javax.jdo.option.Multithreaded", "true");
-                properties.setProperty("datanucleus.autoCreateSchema", "true");
-                properties.setProperty("datanucleus.validateTables", "false");
-                properties.setProperty("datanucleus.validateConstraints", "false");
-                properties.setProperty("datanucleus.autoCreateColumns", "true");
-// below is default, supported are "LowerCase", "PreserveCase"
-//                properties.setProperty("datanucleus.identifier.case","UpperCase");
-                PersistenceManagerFactory pmf =
-                        JDOHelper.getPersistenceManagerFactory(properties);
-                _pm = pmf.getPersistenceManager();
+                _pm = createPersistenceManager();
                 sb.append("Success...\n");
             } catch (Exception e) {
                 log.error(e.toString());
@@ -302,10 +268,28 @@ public abstract class TransferManager extends AbstractCell
         return sb.toString();
     }
 
-    public String ac_set_jdbcDriver_$_1(Args args)
+    private PersistenceManager createPersistenceManager()
     {
-        _jdbcDriver = args.argv(0);
-        return "setting jdbcDriver to " + _jdbcDriver;
+        // FIXME: Close connection pool and pmf
+        Properties properties = new Properties();
+        properties.setProperty("javax.jdo.option.DetachAllOnCommit", "true");
+        properties.setProperty("javax.jdo.option.Optimistic", "true");
+        properties.setProperty("javax.jdo.option.NontransactionalRead", "true");
+        properties.setProperty("javax.jdo.option.RetainValues", "true");
+        properties.setProperty("javax.jdo.option.Multithreaded", "true");
+        properties.setProperty("datanucleus.autoCreateSchema", "true");
+        properties.setProperty("datanucleus.validateTables", "false");
+        properties.setProperty("datanucleus.validateConstraints", "false");
+        properties.setProperty("datanucleus.autoCreateColumns", "true");
+        properties.setProperty("datanucleus.connectionPoolingType", "None");
+// below is default, supported are "LowerCase", "PreserveCase"
+//                properties.setProperty("datanucleus.identifier.case","UpperCase");
+        HikariConfig config = new HikariConfig();
+        config.setDataSource(new DriverManagerDataSource(_jdbcUrl, _user, _pass));
+        JDOPersistenceManagerFactory pmf = new JDOPersistenceManagerFactory(
+                Maps.<String, Object>newHashMap(Maps.fromProperties(properties)));
+        pmf.setConnectionFactory(new HikariDataSource(config));
+        return pmf.getPersistenceManager();
     }
 
     public String ac_set_maxNumberOfDeleteRetries_$_1(Args args)
@@ -380,7 +364,8 @@ public abstract class TransferManager extends AbstractCell
         if (timeout <= 0) {
             return "Error, pool timeout should be greater then 0 ";
         }
-        _poolTimeout = timeout;
+        _poolStub.setTimeout(timeout);
+        _poolStub.setTimeoutUnit(SECONDS);
         return "set pool timeout to " + timeout + " seconds";
     }
 
@@ -392,7 +377,8 @@ public abstract class TransferManager extends AbstractCell
         if (timeout <= 0) {
             return "Error, pool manger timeout should be greater then 0 ";
         }
-        _poolManagerTimeout = timeout;
+        _poolManager.setTimeout(timeout);
+        _poolManager.setTimeoutUnit(SECONDS);
         return "set pool manager timeout to " + timeout + " seconds";
     }
 
@@ -404,7 +390,8 @@ public abstract class TransferManager extends AbstractCell
         if (timeout <= 0) {
             return "Error, pnfs manger timeout should be greater then 0 ";
         }
-        _pnfsManagerTimeout = timeout;
+        _pnfsManager.setTimeout(timeout);
+        _pnfsManager.setTimeoutUnit(SECONDS);
         return "set pnfs manager timeout to " + timeout + " seconds";
     }
 
@@ -532,7 +519,7 @@ public abstract class TransferManager extends AbstractCell
         if (!newTransfer()) {
             throw new CacheException(TransferManagerMessage.TOO_MANY_TRANSFERS, "too many transfers!");
         }
-        new TransferManagerHandler(this, message, envelope.getSourcePath()).handle();
+        new TransferManagerHandler(this, message, envelope.getSourcePath().revert(), executor).handle();
         return message;
     }
 
@@ -686,29 +673,9 @@ public abstract class TransferManager extends AbstractCell
         }
     }
 
-    public int getNumberOfTranfers()
+    public CellStub getPoolStub()
     {
-        return _numTransfers;
-    }
-
-    public long getPoolTimeout()
-    {
-        return _poolTimeout;
-    }
-
-    public long getPoolManagerTimeout()
-    {
-        return _poolManagerTimeout;
-    }
-
-    public long getPnfsManagerTimeout()
-    {
-        return _pnfsManagerTimeout;
-    }
-
-    public long getMoverTimeout()
-    {
-        return _moverTimeout;
+        return _poolStub;
     }
 
     public String getLogRootName()
@@ -721,29 +688,24 @@ public abstract class TransferManager extends AbstractCell
         return _overwrite;
     }
 
-    public CellPath getPoolManagerPath()
-    {
-        return _poolMgrPath;
-    }
-
-    public String getPoolManagerName()
+    public CellStub getPoolManagerStub()
     {
         return _poolManager;
     }
 
-    public String getPnfsManagerName()
+    public CellStub getPnfsManagerStub()
     {
         return _pnfsManager;
+    }
+
+    public CellStub getBillingStub()
+    {
+        return _billingStub;
     }
 
     public String getIoQueueName()
     {
         return _ioQueueName;
-    }
-
-    public synchronized PersistenceManager getPersistenceManager()
-    {
-        return _pm;
     }
 
     public static void rollbackIfActive(Transaction tx)
@@ -761,11 +723,6 @@ public abstract class TransferManager extends AbstractCell
     public void setDbLogging(boolean yes)
     {
         _doDatabaseLogging = yes;
-    }
-
-    public void setMaxNumberOfDeleteRetries(int nretries)
-    {
-        _maxNumberOfDeleteRetries = nretries;
     }
 
     public int getMaxNumberOfDeleteRetries()
@@ -799,10 +756,5 @@ public abstract class TransferManager extends AbstractCell
     public String getPoolProxy()
     {
         return _poolProxy;
-    }
-
-    public void setPoolProxy(String poolProxy)
-    {
-        _poolProxy = poolProxy;
     }
 }

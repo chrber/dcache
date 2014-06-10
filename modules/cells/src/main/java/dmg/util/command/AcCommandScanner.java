@@ -10,9 +10,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import dmg.util.Args;
-import dmg.util.CommandInterpreter;
-import dmg.util.CommandRequestable;
+import org.dcache.util.Args;
+import org.dcache.util.cli.CommandExecutor;
+import org.dcache.util.cli.CommandScanner;
 
 /**
  * Implements the legacy cell shell commands which use reflection
@@ -20,9 +20,6 @@ import dmg.util.CommandRequestable;
  */
 public class AcCommandScanner implements CommandScanner
 {
-    private static final Class<?> ASCII_ARGS = Args.class;
-    private static final Class<?> BINARY_ARGS = CommandRequestable.class;
-
     private enum FieldType { HELP_HINT, FULL_HELP, ACL }
 
     @Override
@@ -83,16 +80,9 @@ public class AcCommandScanner implements CommandScanner
         for (Method method: obj.getClass().getMethods()) {
             Class<?>[] params = method.getParameterTypes();
             //
-            // check the signature  (Args args or CommandRequestable)
+            // check the signature: Args args
             //
-            int methodType;
-            if (params.length != 1) {
-                continue;
-            } else if (params[0].equals(ASCII_ARGS)) {
-                methodType = CommandInterpreter.ASCII;
-            } else if (params[0].equals(BINARY_ARGS)) {
-                methodType = CommandInterpreter.BINARY;
-            } else {
+            if (params.length != 1 || !params[0].equals(Args.class)) {
                 continue;
             }
 
@@ -142,7 +132,7 @@ public class AcCommandScanner implements CommandScanner
             }
 
             AcCommandExecutor command = getCommandExecutor(obj, commands, name);
-            command.setMethod(methodType, method, minArgs, maxArgs);
+            command.setMethod(method, minArgs, maxArgs);
         }
     }
 

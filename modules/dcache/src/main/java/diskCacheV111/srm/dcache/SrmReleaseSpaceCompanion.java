@@ -66,6 +66,7 @@ documents or software obtained from this server.
 
 package diskCacheV111.srm.dcache;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +82,6 @@ import dmg.cells.nucleus.CellPath;
 
 import org.dcache.cells.AbstractMessageCallback;
 import org.dcache.cells.CellStub;
-import org.dcache.cells.ThreadManagerMessageCallback;
 import org.dcache.srm.SrmReleaseSpaceCallback;
 
 public final class SrmReleaseSpaceCompanion
@@ -126,9 +126,9 @@ public final class SrmReleaseSpaceCompanion
     }
 
     @Override
-    public void timeout(CellPath path)
+    public void timeout(String error)
     {
-        LOGGER.error("Timeout waiting for answer from SrmSpaceManager");
+        LOGGER.error(error);
         callback.internalError("Space manager timeout");
     }
 
@@ -146,8 +146,7 @@ public final class SrmReleaseSpaceCompanion
             SrmReleaseSpaceCompanion companion = new SrmReleaseSpaceCompanion(callback);
             Release release = new Release(token, spaceToReleaseInBytes);
             release.setSubject(subject);
-            spaceManagerStub.send(release, Release.class,
-                    new ThreadManagerMessageCallback<>(companion));
+            CellStub.addCallback(spaceManagerStub.send(release), companion, MoreExecutors.sameThreadExecutor());
         } catch (NumberFormatException e) {
             callback.invalidRequest("No such space");
         }

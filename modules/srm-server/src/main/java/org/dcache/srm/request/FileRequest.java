@@ -232,7 +232,7 @@ public abstract class FileRequest<R extends ContainerRequest> extends Job {
         return (int) (getId() ^ getId() >> 32);
     }
 
-    public void setStatus(String status) throws SRMException {
+    public void setStatus(SRMUser user, String status) throws SRMException {
         logger.debug("("+status+")");
         try {
             wlock();
@@ -284,7 +284,7 @@ public abstract class FileRequest<R extends ContainerRequest> extends Job {
         }
     }
 
-    public void abort() throws IllegalStateTransition
+    public void abort(String reason) throws IllegalStateTransition, SRMException
     {
         wlock();
         try {
@@ -305,7 +305,7 @@ public abstract class FileRequest<R extends ContainerRequest> extends Job {
              * requests. Some subclasses thus override this method.
              */
             if (!getState().isFinal()) {
-                setState(State.CANCELED, "Request aborted.");
+                setState(State.CANCELED, reason);
             }
         } finally {
             wunlock();
@@ -431,4 +431,11 @@ public abstract class FileRequest<R extends ContainerRequest> extends Job {
     {
         return any(asList(protocols), in(asList(getStorage().supportedGetProtocols())));
     }
+
+    @Override
+    public void toString(StringBuilder sb, boolean longformat) {
+        toString(sb, "", longformat);
+    }
+
+    abstract void toString(StringBuilder sb, String padding, boolean longformat);
 }

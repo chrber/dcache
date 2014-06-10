@@ -17,6 +17,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.concurrent.ScheduledExecutorService;
 
 import org.dcache.srm.request.CopyFileRequest;
 import org.dcache.srm.request.Job;
@@ -59,15 +60,15 @@ public class CopyFileRequestStorage extends DatabaseFileRequestStorage<CopyFileR
                                   request.getRequestId(),
                                   request.getCredentialId(),
                                   request.getStatusCodeString(),
-                                  request.getFromURL(),
-                                  request.getToURL(),
-                                  (request.getFrom_turl()!=null?request.getFrom_turl().toString():null),
-                                  (request.getTo_turl()!=null?request.getTo_turl().toString():null),
-                                  request.getLocal_from_path(),
-                                  request.getLocal_to_path(),
+                                  request.getSourceSurl().toString(),
+                                  request.getDestinationSurl().toString(),
+                                  (request.getSourceTurl()!=null?request.getSourceTurl().toString():null),
+                                  (request.getDestinationTurl()!=null?request.getDestinationTurl().toString():null),
+                                  request.getLocalSourcePath(),
+                                  request.getLocalDestinationPath(),
                                   request.getSize(),//20
-                                  request.getFromFileId(),
-                                  request.getToFileId(),
+                                  null, // FromFileId (unused)
+                                  null, // ToFileId (unused)
                                   request.getRemoteRequestId(),
                                   request.getRemoteFileId(),
                                   request.getSpaceReservationId(),
@@ -161,15 +162,15 @@ public class CopyFileRequestStorage extends DatabaseFileRequestStorage<CopyFileR
                                   request.getRequestId(),
                                   request.getCredentialId(),
                                   request.getStatusCodeString(),
-                                  request.getFromURL(),
-                                  request.getToURL(),
-                                  (request.getFrom_turl()!=null?request.getFrom_turl().toString():null),
-                                  (request.getTo_turl()!=null?request.getTo_turl().toString():null),
-                                  request.getLocal_from_path(),
-                                  request.getLocal_to_path(),
+                                  request.getSourceSurl().toString(),
+                                  request.getDestinationSurl().toString(),
+                                  (request.getSourceTurl()!=null?request.getSourceTurl().toString():null),
+                                  (request.getDestinationTurl()!=null?request.getDestinationTurl().toString():null),
+                                  request.getLocalSourcePath(),
+                                  request.getLocalDestinationPath(),
                                   request.getSize(),
-                                  request.getFromFileId(),
-                                  request.getToFileId(),
+                                  null, // FromFileId (unused)
+                                  null, // ToFileId (unused)
                                   request.getRemoteRequestId(),
                                   request.getRemoteFileId(),
                                   request.getSpaceReservationId(),
@@ -179,10 +180,10 @@ public class CopyFileRequestStorage extends DatabaseFileRequestStorage<CopyFileR
 
 
     /** Creates a new instance of CopyFileRequestStorage */
-    public CopyFileRequestStorage(Configuration.DatabaseParameters configuration)
+    public CopyFileRequestStorage(Configuration.DatabaseParameters configuration, ScheduledExecutorService executor)
             throws DataAccessException
     {
-        super(configuration);
+        super(configuration, executor);
     }
 
     @Override

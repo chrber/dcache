@@ -67,6 +67,8 @@ COPYRIGHT STATUS:
 package diskCacheV111.srm.dcache;
 
 import com.google.common.base.Objects;
+import com.google.common.util.concurrent.AbstractFuture;
+import com.google.common.util.concurrent.ListenableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,6 +76,7 @@ import javax.security.auth.Subject;
 
 import java.net.InetSocketAddress;
 import java.util.EnumSet;
+import java.util.concurrent.Executor;
 
 import diskCacheV111.poolManager.PoolMonitorV5;
 import diskCacheV111.util.AccessLatency;
@@ -86,18 +89,22 @@ import diskCacheV111.vehicles.ProtocolInfo;
 import org.dcache.acl.enums.AccessMask;
 import org.dcache.cells.AbstractMessageCallback;
 import org.dcache.cells.CellStub;
-import org.dcache.cells.ThreadManagerMessageCallback;
 import org.dcache.namespace.FileAttribute;
 import org.dcache.namespace.FileType;
 import org.dcache.pinmanager.PinManagerPinMessage;
 import org.dcache.poolmanager.PoolMonitor;
-import org.dcache.srm.PinCallbacks;
+import org.dcache.srm.AbstractStorageElement;
+import org.dcache.srm.SRMAuthorizationException;
+import org.dcache.srm.SRMException;
+import org.dcache.srm.SRMFileUnvailableException;
+import org.dcache.srm.SRMInternalErrorException;
+import org.dcache.srm.SRMInvalidPathException;
 import org.dcache.vehicles.FileAttributes;
 import org.dcache.vehicles.PnfsGetFileAttributes;
 
 import static diskCacheV111.util.CacheException.*;
 
-public class PinCompanion
+public class PinCompanion extends AbstractFuture<AbstractStorageElement.Pin>
 {
     private final static Logger _log =
         LoggerFactory.getLogger(PinCompanion.class);
@@ -108,12 +115,12 @@ public class PinCompanion
     private final Subject _subject;
     private final FsPath _path;
     private final String _clientHost;
-    private final PinCallbacks _callbacks;
     private final long _pinLifetime;
     private final String _requestToken;
     private final CellStub _pnfsStub;
     private final CellStub _poolManagerStub;
     private final CellStub _pinManagerStub;
+    private final Executor _executor;
     private final PoolMonitor _poolMonitor;
     private final boolean _isOnlinePinningEnabled;
 
@@ -157,8 +164,7 @@ public class PinCompanion
                 new PnfsGetFileAttributes(_path.toString(), attributes);
             msg.setAccessMask(EnumSet.of(AccessMask.READ_DATA));
             msg.setSubject(_subject);
-            _pnfsStub.send(msg, PnfsGetFileAttributes.class,
-                           new ThreadManagerMessageCallback(this));
+            CellStub.addCallback(_pnfsStub.send(msg), this, _executor);
         }
 
         private boolean isDirectory(FileAttributes attributes)
@@ -184,7 +190,7 @@ public class PinCompanion
             _attributes = message.getFileAttributes();
 
             if (isDirectory(_attributes)) {
-                _callbacks.FileNotFound("Path is a directory.");
+                setException(new SRMInvalidPathException("Path is a directory."));
                 _state = new FailedState();
             } else if (!isDiskFile(_attributes) || _isOnlinePinningEnabled) {
                 _state = new PinningState();
@@ -219,8 +225,7 @@ public class PinCompanion
             msg.setSkipCostUpdate(true);
             msg.setSubject(_subject);
 
-            _poolManagerStub.send(msg, PoolMgrSelectReadPoolMsg.class,
-                                  new ThreadManagerMessageCallback(this));
+            CellStub.addCallback(_poolManagerStub.send(msg), this, _executor);
         }
 
         @Override
@@ -248,8 +253,7 @@ public class PinCompanion
                 new PinManagerPinMessage(_attributes, getProtocolInfo(),
                                          _requestToken, _pinLifetime);
             msg.setSubject(_subject);
-            _pinManagerStub.send(msg, PinManagerPinMessage.class,
-                                 new ThreadManagerMessageCallback(this));
+            CellStub.addCallback(_pinManagerStub.send(msg), this, _executor);
         }
 
         @Override
@@ -270,19 +274,17 @@ public class PinCompanion
     private PinCompanion(Subject subject,
                          FsPath path,
                          String clientHost,
-                         PinCallbacks callbacks,
                          long pinLifetime,
                          String requestToken,
                          boolean isOnlinePinningEnabled,
                          PoolMonitor poolMonitor,
                          CellStub pnfsStub,
                          CellStub poolManagerStub,
-                         CellStub pinManagerStub)
+                         CellStub pinManagerStub, Executor executor)
     {
         _subject = subject;
         _path = path;
         _clientHost = clientHost;
-        _callbacks = callbacks;
         _pinLifetime = pinLifetime;
         _requestToken = requestToken;
         _isOnlinePinningEnabled = isOnlinePinningEnabled;
@@ -290,12 +292,13 @@ public class PinCompanion
         _pnfsStub = pnfsStub;
         _poolManagerStub = poolManagerStub;
         _pinManagerStub = pinManagerStub;
+        _executor = executor;
         _state = new LookupState();
     }
 
     private void succeed(String pinId)
     {
-        _callbacks.Pinned(new DcacheFileMetaData(_attributes), pinId);
+        set(new AbstractStorageElement.Pin(new DcacheFileMetaData(_attributes), pinId));
         _state = new PinnedState();
     }
 
@@ -303,30 +306,29 @@ public class PinCompanion
     {
         switch (rc) {
         case FILE_NOT_FOUND:
-            _callbacks.FileNotFound("No such file.");
+            setException(new SRMInvalidPathException("No such file."));
             break;
 
         case FILE_NOT_IN_REPOSITORY:
             _log.warn("Pinning failed for {} ({})", _path, error);
-            _callbacks.Unavailable(error.toString());
+            setException(new SRMFileUnvailableException(error.toString()));
             break;
 
         case PERMISSION_DENIED:
             _log.warn("Pinning failed for {} ({})", _path, error);
-            _callbacks.AuthorizationError(error.toString());
+            setException(new SRMAuthorizationException(error.toString()));
             break;
 
         case TIMEOUT:
             _log.info("Pinning failed: {}", error);
-            _callbacks.Timeout();
+            setException(new SRMInternalErrorException("Pin operation timed out"));
             break;
 
         default:
             _log.error("Pinning failed for {} [rc={},msg={}].", _path, rc, error);
-
             String reason =
                 String.format("Failed to pin file [rc=%d,msg=%s].", rc, error);
-            _callbacks.PinningFailed(reason);
+            setException(new SRMException(reason));
             break;
         }
 
@@ -339,22 +341,23 @@ public class PinCompanion
             _state.getClass().getSimpleName() + "]";
     }
 
-    public static PinCompanion pinFile(Subject subject,
-                                       FsPath path,
-                                       String clientHost,
-                                       PinCallbacks callbacks,
-                                       long pinLifetime,
-                                       String requestToken,
-                                       boolean isOnlinePinningEnabled,
-                                       PoolMonitor poolMonitor,
-                                       CellStub pnfsStub,
-                                       CellStub poolManagerStub,
-                                       CellStub pinManagerStub)
+    public static ListenableFuture<AbstractStorageElement.Pin> pinFile(
+            Subject subject,
+            FsPath path,
+            String clientHost,
+            long pinLifetime,
+            String requestToken,
+            boolean isOnlinePinningEnabled,
+            PoolMonitor poolMonitor,
+            CellStub pnfsStub,
+            CellStub poolManagerStub,
+            CellStub pinManagerStub,
+            Executor executor)
     {
-        return new PinCompanion(subject, path, clientHost, callbacks,
+        return new PinCompanion(subject, path, clientHost,
                                 pinLifetime, requestToken, isOnlinePinningEnabled,
                                 poolMonitor,
-                                pnfsStub, poolManagerStub, pinManagerStub);
+                                pnfsStub, poolManagerStub, pinManagerStub, executor);
     }
 }
 

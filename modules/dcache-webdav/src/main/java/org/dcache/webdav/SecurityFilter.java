@@ -1,5 +1,28 @@
 package org.dcache.webdav;
 
+import io.milton.http.Auth;
+import io.milton.http.Filter;
+import io.milton.http.FilterChain;
+import io.milton.http.HttpManager;
+import io.milton.http.Request;
+import io.milton.http.Response;
+import io.milton.servlet.ServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
+import javax.servlet.http.HttpServletRequest;
+
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.UnknownHostException;
+import java.security.PrivilegedAction;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.Objects;
+
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
@@ -17,15 +40,7 @@ import org.dcache.util.CertificateFactories;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.security.auth.Subject;
-import javax.servlet.http.HttpServletRequest;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.security.PrivilegedAction;
-import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
-
+import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.util.Arrays.asList;
 
 /**
@@ -53,6 +68,8 @@ public class SecurityFilter implements Filter
     private final Logger _log = LoggerFactory.getLogger(SecurityFilter.class);
     private static final String X509_CERTIFICATE_ATTRIBUTE =
         "javax.servlet.request.X509Certificate";
+    public static final String DCACHE_SUBJECT_ATTRIBUTE =
+            "org.dcache.subject";
 
     private String _realm;
     private boolean _isReadOnly;
@@ -60,6 +77,7 @@ public class SecurityFilter implements Filter
     private LoginStrategy _loginStrategy;
     private FsPath _rootPath = new FsPath();
     private CertificateFactory _cf;
+    private FsPath _uploadPath;
 
     public SecurityFilter()
     {
@@ -90,6 +108,8 @@ public class SecurityFilter implements Filter
 
             LoginReply login = _loginStrategy.login(subject);
             subject = login.getSubject();
+
+            servletRequest.setAttribute(DCACHE_SUBJECT_ATTRIBUTE, subject);
 
             if (!isAuthorizedMethod(request.getMethod(), login)) {
                 throw new PermissionDeniedCacheException("Permission denied: " +
@@ -154,10 +174,23 @@ public class SecurityFilter implements Filter
         }
 
         String path = request.getAbsolutePath();
-        FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
-        if (fullRequestPath.toString().contains("/status.php")) {
-            _log.info("/status.php was detected in path");
-            return;
+        FsPath fullPath = new FsPath(_rootPath, new FsPath(path));
+        if (!fullPath.startsWith(userRoot) &&
+                (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
+            if (!path.equals("/")) {
+                throw new PermissionDeniedCacheException("Permission denied: " +
+                        "path outside user's root");
+            }
+
+            try {
+                FsPath redirectFullPath = new FsPath(userRoot, userHome);
+                String redirectPath = _rootPath.relativize(redirectFullPath).toString();
+                URI uri = new URI(request.getAbsoluteUrl());
+                URI redirect = new URI(uri.getScheme(), uri.getAuthority(), redirectPath, null, null);
+                throw new RedirectException(null, redirect.toString());
+            } catch (URISyntaxException e) {
+                throw new CacheException(e.getMessage(), e);
+            }
         }
         if (!fullRequestPath.startsWith(_rootPath)) {
             throw new PermissionDeniedCacheException("Permission denied");
@@ -270,13 +303,23 @@ public class SecurityFilter implements Filter
         _loginStrategy = loginStrategy;
     }
 
+    public void setRootPath(String path)
+    {
+        _rootPath = new FsPath(path);
+    }
+
     public String getRootPath()
     {
         return _rootPath.toString();
     }
 
-    public void setRootPath(String path)
+    public void setUploadPath(String uploadPath)
     {
-        _rootPath = new FsPath(path);
+        this._uploadPath = isNullOrEmpty(uploadPath) ? null : new FsPath(uploadPath);
+    }
+
+    public String getUploadPath()
+    {
+        return Objects.toString(_uploadPath, null);
     }
 }

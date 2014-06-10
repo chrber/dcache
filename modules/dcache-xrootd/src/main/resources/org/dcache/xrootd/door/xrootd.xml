@@ -7,12 +7,8 @@
            http://www.springframework.org/schema/context
            http://www.springframework.org/schema/context/spring-context.xsd">
 
+  <context:property-placeholder/>
   <context:annotation-config/>
-
-  <bean id="properties" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
-    <description>Imported configuration data</description>
-    <property name="location" value="arguments:"/>
-  </bean>
 
   <!-- Convert properties with multiple values separated by comma into an array of strings:
        key=value1,value2,value3 : String[] {value1, value2, value3}
@@ -51,10 +47,9 @@
     <property name="timeoutUnit" value="${xrootd.service.gplazma.timeout.unit}"/>
   </bean>
 
-  <bean id="pool-monitor" class="org.dcache.poolmanager.RemotePoolMonitorFactoryBean" init-method="init">
+  <bean id="pool-monitor" class="org.dcache.poolmanager.RemotePoolMonitorFactoryBean">
     <description>Maintains runtime information about all pools</description>
     <property name="poolManagerStub" ref="pool-manager-stub"/>
-    <property name="executor" ref="scheduled-thread-pool"/>
   </bean>
 
   <bean id="scheduled-thread-pool"
@@ -112,6 +107,7 @@
     <property name="door" ref="door"/>
     <property name="channelHandlerFactories" ref="channelhandler-factories"/>
     <property name="rootPath" value="${xrootd.root}"/>
+    <property name="uploadPath" value="${xrootd.authz.upload-directory}"/>
   </bean>
 
   <bean id="pnfs" class="diskCacheV111.util.PnfsHandler">
@@ -179,5 +175,6 @@
     <property name="port" value="${xrootd.net.port}"/>
     <property name="address" value="#{ '${xrootd.net.listen}'.equals('any') ? null : '${xrootd.net.listen}' }"/>
     <property name="loginBrokers" value="${xrootd.service.loginbroker}"/>
+    <property name="root" value="${xrootd.root}"/>
   </bean>
 </beans>

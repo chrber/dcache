@@ -72,6 +72,8 @@ COPYRIGHT STATUS:
 
 package org.dcache.srm.request;
 
+import com.google.common.util.concurrent.CheckedFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import org.apache.axis.types.UnsignedLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,14 +83,13 @@ import java.net.URI;
 
 import diskCacheV111.srm.RequestFileStatus;
 
+import org.dcache.srm.AbstractStorageElement;
 import org.dcache.srm.FileMetaData;
-import org.dcache.srm.PinCallbacks;
 import org.dcache.srm.SRM;
 import org.dcache.srm.SRMAuthorizationException;
 import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.SRMUser;
-import org.dcache.srm.UnpinCallbacks;
 import org.dcache.srm.scheduler.FatalJobFailure;
 import org.dcache.srm.scheduler.IllegalStateTransition;
 import org.dcache.srm.scheduler.NonFatalJobFailure;
@@ -106,7 +107,7 @@ import org.dcache.srm.v2_2.TStatusCode;
 public final class GetFileRequest extends FileRequest<GetRequest> {
     private final static Logger logger = LoggerFactory.getLogger(GetFileRequest.class);
 
-    private URI surl;
+    private final URI surl;
     private URI turl;
     private String pinId;
     private String fileId;
@@ -212,12 +213,7 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
     }
 
     public URI getSurl() {
-        rlock();
-        try {
-            return surl;
-        } finally {
-            runlock();
-        }
+        return surl;
     }
 
     public URI getTurl() {
@@ -344,30 +340,32 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
     }
 
     @Override
-    public void toString(StringBuilder sb, boolean longformat) {
-        sb.append(" GetFileRequest ");
-        sb.append(" id:").append(getId());
-        sb.append(" priority:").append(getPriority());
-        sb.append(" creator priority:");
-        try {
-            sb.append(getUser().getPriority());
-        } catch (SRMInvalidRequestException ire) {
-            sb.append("Unknown");
+    public void toString(StringBuilder sb, String padding, boolean longformat) {
+        sb.append(padding);
+        if (padding.isEmpty()) {
+            sb.append("Get ");
+        }
+        sb.append("file id:").append(getId());
+        if (getPriority() != 0) {
+            sb.append(" priority:").append(getPriority());
         }
         State state = getState();
         sb.append(" state:").append(state);
         if(longformat) {
-            sb.append('\n').append("   SURL: ").append(getSurlString());
-            sb.append('\n').append("   pinned: ").append(isPinned());
+            sb.append('\n');
+            sb.append(padding).append("   SURL: ").append(getSurlString()).append('\n');
+            sb.append(padding).append("   Pinned: ").append(isPinned()).append('\n');
             String thePinId = getPinId();
             if(thePinId != null) {
-                sb.append('\n').append("   pinid: ").append(thePinId);
+                sb.append(padding).append("   Pin id: ").append(thePinId).append('\n');
             }
-            sb.append('\n').append("   TURL: ").append(getTurlString());
-            sb.append('\n').append("   status code:").append(getStatusCode());
-            sb.append('\n').append("   error message:").append(getErrorMessage());
-            sb.append('\n').append("   History of State Transitions: \n");
-            sb.append(getHistory());
+            sb.append(padding).append("   TURL: ").append(getTurlString()).append('\n');
+            TStatusCode status = getStatusCode();
+            if (status != null) {
+                sb.append(padding).append("   Status:").append(status).append('\n');
+            }
+            sb.append(padding).append("   History of State Transitions:\n");
+            sb.append(getHistory(padding + "   "));
         }
     }
 
@@ -440,12 +438,14 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
 
         URI surl = getSurl();
         logger.info("Pinning {}", surl);
-        getStorage().pinFile(getUser(),
-                             surl,
-                             getContainerRequest().getClient_host(),
-                             lifetime,
-                             String.valueOf(getRequestId()),
-                             new ThePinCallbacks(getId()));
+        CheckedFuture<AbstractStorageElement.Pin,? extends SRMException> future =
+                getStorage().pinFile(
+                        getUser(),
+                        surl,
+                        getContainerRequest().getClient_host(),
+                        lifetime,
+                        String.valueOf(getRequestId()));
+        future.addListener(new ThePinCallbacks(getId(), future), MoreExecutors.sameThreadExecutor());
     }
 
     @Override
@@ -462,7 +462,6 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
 
         if(state.isFinal()) {
             if(getFileId() != null && getPinId() != null) {
-                UnpinCallbacks callbacks = new TheUnpinCallbacks(this.getId());
                 logger.info("state changed to final state, unpinning fileId= "+ getFileId()+" pinId = "+getPinId());
                 SRMUser user;
                 try {
@@ -471,7 +470,21 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
                     logger.error(ire.toString()) ;
                     return;
                 }
-                getStorage().unPinFile(user,getFileId(),callbacks, getPinId());
+                final CheckedFuture<String, ? extends SRMException> future =
+                        getStorage().unPinFile(user, getFileId(), getPinId());
+                future.addListener(new Runnable()
+                {
+                    @Override
+                    public void run()
+                    {
+                        try {
+                            String pinId = future.checkedGet();
+                            logger.debug("Unpinned (pinId={}).", pinId);
+                        } catch (SRMException e) {
+                            logger.error("Unpinning failed: {}", e.getMessage());
+                        }
+                    }
+                }, MoreExecutors.sameThreadExecutor());
             }
         }
 
@@ -480,22 +493,9 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
 
     private void computeTurl() throws SRMException
     {
-        URI turl;
         GetRequest request = getContainerRequest();
-        String firstDcapTurl = request.getFirstDcapTurl();
-        if (firstDcapTurl != null) {
-            turl = getStorage().getGetTurl(getUser(),
-                    getSurl(),
-                    URI.create(firstDcapTurl));
-        } else {
-            turl = getStorage().getGetTurl(getUser(),
-                    getSurl(),
-                    request.protocols);
-            if (turl.getScheme().equals("dcap")) {
-                request.setFirstDcapTurl(turl.toString());
-            }
-        }
-
+        URI turl = getStorage().getGetTurl(request.getUser(), getSurl(), request.getProtocols(), request.getPreviousTurl());
+        request.setPreviousTurl(turl);
         setTurl(turl);
     }
 
@@ -519,9 +519,9 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
         }
 
         switch (getState()) {
-        case RESTORED:
         case PENDING:
-        case RQUEUED:
+        case TQUEUED:
+        case RETRYWAIT:
             return new TReturnStatus(TStatusCode.SRM_REQUEST_QUEUED, description);
         case READY:
         case TRANSFERRING:
@@ -644,12 +644,16 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
         }
     }
 
-    private  static class ThePinCallbacks implements PinCallbacks {
-
+    private  static class ThePinCallbacks implements Runnable
+    {
         private final long fileRequestJobId;
+        private final CheckedFuture<AbstractStorageElement.Pin, ? extends SRMException> future;
 
-        public ThePinCallbacks(long fileRequestJobId) {
+        public ThePinCallbacks(long fileRequestJobId,
+                               CheckedFuture<AbstractStorageElement.Pin, ? extends SRMException> future)
+        {
             this.fileRequestJobId = fileRequestJobId;
+            this.future = future;
         }
 
         public GetFileRequest getGetFileRequest()
@@ -659,195 +663,40 @@ public final class GetFileRequest extends FileRequest<GetRequest> {
         }
 
         @Override
-        public void FileNotFound(String reason) {
+        public void run()
+        {
             try {
-                GetFileRequest fr = getGetFileRequest();
-                try {
-                    fr.setStateAndStatusCode(State.FAILED,
-                        reason,
-                        TStatusCode.SRM_INVALID_PATH);
-                } catch (IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch(SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Unavailable(String reason) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                try {
-                    fr.setStateAndStatusCode(State.FAILED,
-                                             reason,
-                                             TStatusCode.SRM_FILE_UNAVAILABLE);
-                } catch (IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void AuthorizationError( String error) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                try {
-                    fr.setStateAndStatusCode(State.FAILED, error, TStatusCode.SRM_AUTHORIZATION_FAILURE);
-                } catch (IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Timeout() {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                try {
-                    fr.setState(State.FAILED, "Pin operation timed out.");
-                } catch (IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
-                }
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Pinned(FileMetaData fileMetaData, String pinId) {
-            try {
-                logger.debug("File pinned (pinId={}).", pinId);
-
                 GetFileRequest fr = getGetFileRequest();
                 fr.wlock();
                 try {
+                    AbstractStorageElement.Pin pin = future.checkedGet();
+                    logger.debug("File pinned (pinId={}).", pin.pinId);
                     State state = fr.getState();
                     if (state == State.ASYNCWAIT || state == State.RUNNING) {
-                        fr.setFileId(fileMetaData.fileId);
-                        fr.setFileMetaData(fileMetaData);
-                        fr.setPinId(pinId);
+                        fr.setFileId(pin.fileMetaData.fileId);
+                        fr.setFileMetaData(pin.fileMetaData);
+                        fr.setPinId(pin.pinId);
                         if (state == State.ASYNCWAIT) {
                             Scheduler scheduler =
-                                Scheduler.getScheduler(fr.getSchedulerId());
+                                    Scheduler.getScheduler(fr.getSchedulerId());
                             scheduler.schedule(fr);
                         }
                     }
+                } catch (SRMException e) {
+                    fr.setStateAndStatusCode(State.FAILED,
+                                             e.getMessage(),
+                                             e.getStatusCode());
                 } finally {
                     fr.wunlock();
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
             } catch (SRMInvalidRequestException e) {
                 logger.warn(e.getMessage());
             } catch (IllegalStateTransition e) {
-                logger.error(e.getMessage());
-            }
-        }
-
-        @Override
-        public void PinningFailed(String reason) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                try {
-                    fr.setState(State.FAILED,reason);
-                } catch (IllegalStateTransition ist) {
-                    if (!ist.getFromState().isFinal()) {
-                        logger.error(ist.getMessage());
-                    }
+                if (!e.getFromState().isFinal()) {
+                    logger.error(e.getMessage());
                 }
-            } catch(SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-    }
-
-    private  static class TheUnpinCallbacks implements UnpinCallbacks {
-
-        private final long fileRequestJobId;
-
-        public TheUnpinCallbacks(long fileRequestJobId) {
-            this.fileRequestJobId = fileRequestJobId;
-        }
-
-        public GetFileRequest getGetFileRequest()
-                throws SRMInvalidRequestException {
-            return Job.getJob(fileRequestJobId, GetFileRequest.class);
-        }
-
-        @Override
-        public void Error( String error) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                logger.error("Unpinning failed: {}", error);
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Exception( Exception e) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                logger.error("Unpinning failed.", e);
-            } catch (SRMInvalidRequestException e1) {
-                logger.warn(e1.getMessage());
-            }
-        }
-
-
-
-
-        @Override
-        public void Timeout() {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                logger.error("Unpinning timed out.");
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void Unpinned(String pinId) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-                logger.debug("Unpinned (pinId={}).", pinId);
-                State state = fr.getState();
-               if(state == State.ASYNCWAIT) {
-                   fr.setPinId(pinId);
-                   Scheduler scheduler = Scheduler.getScheduler(fr.getSchedulerId());
-                   scheduler.schedule(fr);
-               }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (IllegalStateTransition e) {
-                logger.error(e.getMessage());
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
-            }
-        }
-
-        @Override
-        public void UnpinningFailed(String reason) {
-            try {
-                GetFileRequest fr = getGetFileRequest();
-            } catch (SRMInvalidRequestException e) {
-                logger.warn(e.getMessage());
             }
         }
     }
+
 }

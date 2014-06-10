@@ -29,16 +29,16 @@ import diskCacheV111.vehicles.PnfsFileInfoMessage;
 import diskCacheV111.vehicles.StorageInfo;
 import diskCacheV111.vehicles.WarningPnfsFileInfoMessage;
 
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellInfoProvider;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.EnvironmentAware;
-import dmg.util.Args;
 import dmg.util.Formats;
 import dmg.util.Replaceable;
 
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
+import org.dcache.util.Args;
 import org.dcache.util.Slf4jSTErrorListener;
 
 import static com.google.common.collect.Iterables.toArray;
@@ -150,13 +150,13 @@ public final class BillingCell
             doStatistics(info);
         }
 
-        String output = getFormattedMessage(info);
-        if (output.isEmpty()) {
-            return;
-        }
-        _log.info(output);
-
         if (_enableText) {
+
+            String output = getFormattedMessage(info);
+            if (output.isEmpty()) {
+                return;
+            }
+
             String ext = getFilenameExtension(new Date(info.getTimestamp()));
             logInfo(output, ext);
             if (info.getResultCode() != 0) {

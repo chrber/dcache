@@ -10,12 +10,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellInfoProvider;
-import dmg.util.Args;
-
-import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellMessageReceiver;
+
 import org.dcache.services.info.base.BadStatePathException;
 import org.dcache.services.info.base.State;
 import org.dcache.services.info.base.StateObservatory;
@@ -26,6 +25,7 @@ import org.dcache.services.info.gathers.MessageHandlerChain;
 import org.dcache.services.info.serialisation.SimpleTextSerialiser;
 import org.dcache.services.info.serialisation.StateSerialiser;
 import org.dcache.services.info.serialisation.XmlSerialiser;
+import org.dcache.util.Args;
 import org.dcache.vehicles.InfoGetSerialisedDataMessage;
 
 public class InfoProvider  implements CellCommandListener, CellInfoProvider,
@@ -195,13 +195,11 @@ public class InfoProvider  implements CellCommandListener, CellInfoProvider,
     {
         _log.trace("Received InfoGetSerialisedDataMessage.");
 
-        StateSerialiser serialiser = _availableSerialisers.get(XmlSerialiser.NAME);
+        StateSerialiser serialiser = _availableSerialisers.get(message.getSerialiser());
 
         if (serialiser == null) {
-            _log.error("Couldn't find the xmlSerialiser");
-            // Really, we should propagate this back as an Exception.
-            message.setData(null);
-            return message;
+            _log.error("Couldn't find serialiser {}", message.getSerialiser());
+            throw new IllegalArgumentException("no such serialiser");
         }
 
         String data;

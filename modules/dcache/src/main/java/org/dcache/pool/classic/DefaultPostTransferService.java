@@ -52,7 +52,7 @@ public class DefaultPostTransferService extends AbstractCellComponent implements
     private static final Logger LOGGER = LoggerFactory.getLogger(DefaultPostTransferService.class);
 
     private final ExecutorService _executor =
-            new CDCExecutorServiceDecorator(
+            new CDCExecutorServiceDecorator<>(
                     Executors.newCachedThreadPool(
                             new ThreadFactoryBuilder().setNameFormat("post-transfer-%d").build()));
     private CellStub _billing;
@@ -155,9 +155,10 @@ public class DefaultPostTransferService extends AbstractCellComponent implements
         info.setTransferAttributes(mover.getBytesTransferred(),
                 mover.getTransferTime(),
                 mover.getProtocolInfo());
+        info.setPath(mover.getPath());
 
         try {
-            _billing.send(info);
+            _billing.notify(info);
         } catch (NoRouteToCellException e) {
             LOGGER.error("Failed to register transfer in billing: {}", e.getMessage());
         }
@@ -178,7 +179,7 @@ public class DefaultPostTransferService extends AbstractCellComponent implements
         }
 
         try {
-            _door.send(mover.getPathToDoor(), finished);
+            _door.notify(mover.getPathToDoor(), finished);
         } catch (NoRouteToCellException e) {
             LOGGER.error("Failed to notify door about transfer termination: {}", e.getMessage());
         }

@@ -45,6 +45,8 @@ check ftp.transaction-log
 check ftp.net.listen
 check ftp.net.internal
 check ftp.mover.queue
+check ftp.root
+check ftp.authz.upload-directory
 
 exec file:${dcache.paths.share}/cells/stage.fragment ftp doors
 
@@ -53,6 +55,8 @@ create dmg.cells.services.login.LoginManager ${ftp.cell.name} \
    -listen=${ftp.net.listen} \
    -prot=raw \
    -export=${ftp.cell.export} \
+   -root=\"${ftp.root}\" \
+   -upload=\"${ftp.authz.upload-directory}\" \
    -clientDataPortRange=${ftp.net.port-range} \
    -protocolFamily=${ftp.service.loginbroker.family} \
    -protocolVersion=${ftp.service.loginbroker.version} \

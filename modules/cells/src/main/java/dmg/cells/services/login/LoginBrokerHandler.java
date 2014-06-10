@@ -14,14 +14,13 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import dmg.cells.nucleus.AbstractCellComponent;
 import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
 
-import dmg.cells.nucleus.AbstractCellComponent;
-
+import org.dcache.util.Args;
 import org.dcache.util.NetworkUtils;
 
 import static java.util.concurrent.TimeUnit.*;
@@ -56,6 +55,7 @@ public class LoginBrokerHandler
     private int _port;
     private ScheduledExecutorService _executor;
     private ScheduledFuture<?> _task;
+    private String _root;
 
     public LoginBrokerHandler()
     {
@@ -100,7 +100,8 @@ public class LoginBrokerHandler
                                 getCellDomainName(),
                                 _protocolFamily,
                                 _protocolVersion,
-                                _protocolEngine);
+                                _protocolEngine,
+                                _root);
         info.setUpdateTime(_brokerUpdateTimeUnit.toMillis(_brokerUpdateTime));
         info.setHosts(_hosts);
         info.setPort(_port);
@@ -276,6 +277,16 @@ public class LoginBrokerHandler
     public synchronized TimeUnit getUpdateTimeUnit()
     {
         return _brokerUpdateTimeUnit;
+    }
+
+    /**
+     * Root directory of door.
+     *
+     * If null, then a per-user root directory is assumed.
+     */
+    public synchronized void setRoot(String root)
+    {
+        _root = root;
     }
 
     public synchronized void setExecutor(ScheduledExecutorService executor)

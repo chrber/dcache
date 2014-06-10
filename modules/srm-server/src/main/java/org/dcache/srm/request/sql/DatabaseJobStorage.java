@@ -72,12 +72,10 @@ import com.google.common.reflect.TypeToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.PreparedStatementCreator;
-import org.springframework.jdbc.core.PreparedStatementSetter;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
@@ -93,9 +91,11 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.dcache.commons.util.SqlHelper;
@@ -132,6 +132,7 @@ public abstract class DatabaseJobStorage<J extends Job> implements JobStorage<J>
     private final Class<J> jobType = (Class<J>) new TypeToken<J>(getClass()) {}.getRawType();
 
     private final Configuration.DatabaseParameters configuration;
+    private final ScheduledExecutorService executor;
     protected final JdbcTemplate jdbcTemplate;
     protected final TransactionTemplate transactionTemplate;
     private final boolean logHistory;
@@ -147,17 +148,16 @@ public abstract class DatabaseJobStorage<J extends Job> implements JobStorage<J>
     protected static final int dateTimeType_int= Types.TIMESTAMP;
     protected static final int booleanType_int= Types.INTEGER;
 
-    public DatabaseJobStorage(Configuration.DatabaseParameters configuration)
+    public DatabaseJobStorage(Configuration.DatabaseParameters configuration, ScheduledExecutorService executor)
             throws DataAccessException
     {
         this.configuration = configuration;
+        this.executor = executor;
         this.logHistory = configuration.isRequestHistoryDatabaseEnabled();
         this.jdbcTemplate = new JdbcTemplate(configuration.getDataSource());
         this.transactionTemplate = new TransactionTemplate(configuration.getTransactionManager());
 
         dbInit(configuration.isCleanPendingRequestsOnRestart());
-        //updatePendingJobs();
-        new Thread(this,"update"+getTableName()).start();
     }
 
     @Override
@@ -274,23 +274,41 @@ public abstract class DatabaseJobStorage<J extends Job> implements JobStorage<J>
 
     private void insertStates() throws DataAccessException
     {
-        String insertState = "INSERT INTO " + srmStateTableName + " VALUES (?, ?)";
-        for (final State state : State.values()) {
-            try {
-                logger.debug("inserting into {} values: {} {}",
-                        srmStateTableName, state.getStateId(), state);
-                jdbcTemplate.update(insertState, new PreparedStatementSetter()
-                {
-                    @Override
-                    public void setValues(PreparedStatement ps) throws SQLException
-                    {
-                        ps.setInt(1, state.getStateId());
-                        ps.setString(2, state.toString());
+        jdbcTemplate.execute(new ConnectionCallback<Void>()
+        {
+            @Override
+            public Void doInConnection(Connection connection) throws SQLException, DataAccessException
+            {
+                connection.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+
+                EnumSet<State> states = EnumSet.allOf(State.class);
+                try (Statement s = connection.createStatement()) {
+                    ResultSet rs = s.executeQuery("SELECT ID,STATE FROM " + srmStateTableName);
+                    while (rs.next()) {
+                        int id = rs.getInt(1);
+                        String name = rs.getString(2);
+                        State state = State.getState(id);
+                        if (state.toString().equals(name)) {
+                            states.remove(state);
+                        }
                     }
-                });
-            } catch (DuplicateKeyException ignored) {
+                }
+                if (!states.isEmpty()) {
+                    try (Statement s = connection.createStatement()) {
+                        s.executeUpdate("DELETE FROM " + srmStateTableName);
+                    }
+                    try (PreparedStatement s = connection.prepareStatement("INSERT INTO " + srmStateTableName + " VALUES (?,?)")) {
+                        for (State state : State.values()) {
+                            s.setInt(1, state.getStateId());
+                            s.setString(2, state.toString());
+                            s.addBatch();
+                        }
+                        s.executeBatch();
+                    }
+                }
+                return null;
             }
-        }
+        });
     }
 
     protected abstract J getJob(
@@ -312,6 +330,7 @@ public abstract class DatabaseJobStorage<J extends Job> implements JobStorage<J>
     @Override
     public void init()
     {
+        executor.scheduleWithFixedDelay(this, 0, configuration.getExpiredRequestRemovalPeriod(), TimeUnit.SECONDS);
     }
 
     @Override
@@ -1011,24 +1030,12 @@ public abstract class DatabaseJobStorage<J extends Job> implements JobStorage<J>
     }
 
     @Override
-    public void run(){
-        long update_period =
-                TimeUnit.SECONDS.toMillis(configuration.getExpiredRequestRemovalPeriod());
-        long history_lifetime =
+    public void run()
+    {
+        long lifetime =
                 TimeUnit.DAYS.toMillis(configuration.getKeepRequestHistoryPeriod());
-        String sql = "DELETE from " + getTableName() + " WHERE CREATIONTIME + LIFETIME < ?";
-        while (true) {
-            try {
-                Thread.sleep(update_period);
-            }
-            catch(InterruptedException ie) {
-                logger.info("database update thread interrupted");
-                return;
-            }
-            long currenttime = System.currentTimeMillis();
-            long cutout_expiration_time = currenttime - history_lifetime;
-            jdbcTemplate.update(sql, cutout_expiration_time);
-        }
+        long timestamp = System.currentTimeMillis() - lifetime;
+        jdbcTemplate.update("DELETE FROM " + getTableName() + " WHERE CREATIONTIME + LIFETIME < ?", timestamp);
     }
 
     protected PreparedStatement getPreparedStatement(

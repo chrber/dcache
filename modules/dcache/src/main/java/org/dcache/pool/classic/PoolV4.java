@@ -12,7 +12,9 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
+import java.nio.channels.CompletionHandler;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -37,7 +39,7 @@ import diskCacheV111.util.CacheFileAvailable;
 import diskCacheV111.util.FileInCacheException;
 import diskCacheV111.util.FileNotFoundCacheException;
 import diskCacheV111.util.FileNotInCacheException;
-import diskCacheV111.util.HsmSet;
+import org.dcache.pool.nearline.HsmSet;
 import diskCacheV111.util.PnfsHandler;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.UnitInteger;
@@ -67,21 +69,22 @@ import diskCacheV111.vehicles.ProtocolInfo;
 import diskCacheV111.vehicles.RemoveFileInfoMessage;
 import diskCacheV111.vehicles.StorageInfo;
 
+import dmg.cells.nucleus.AbstractCellComponent;
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellMessage;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.CellPath;
 import dmg.cells.nucleus.CellVersion;
 import dmg.cells.nucleus.DelayedReply;
 import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.util.Args;
+import dmg.cells.nucleus.Reply;
 import dmg.util.CommandSyntaxException;
 
-import dmg.cells.nucleus.AbstractCellComponent;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
 import org.dcache.pool.FaultEvent;
 import org.dcache.pool.FaultListener;
+import org.dcache.pool.nearline.NearlineStorageHandler;
 import org.dcache.pool.movers.Mover;
 import org.dcache.pool.movers.MoverFactory;
 import org.dcache.pool.p2p.P2PClient;
@@ -97,6 +100,7 @@ import org.dcache.pool.repository.SpaceRecord;
 import org.dcache.pool.repository.StateChangeEvent;
 import org.dcache.pool.repository.StickyRecord;
 import org.dcache.pool.repository.v5.CacheRepositoryV5;
+import org.dcache.util.Args;
 import org.dcache.util.IoPriority;
 import org.dcache.util.Version;
 import org.dcache.vehicles.FileAttributes;
@@ -159,7 +163,7 @@ public class PoolV4
     private HsmFlushController _flushingThread;
     private IoQueueManager _ioQueue ;
     private HsmSet _hsmSet;
-    private HsmStorageHandler2 _storageHandler;
+    private NearlineStorageHandler _storageHandler;
     private boolean _crashEnabled;
     private String _crashType = "exception";
     private long _gap = 4L * 1024L * 1024L * 1024L;
@@ -354,9 +358,9 @@ public class PoolV4
     }
 
     @Required
-    public void setStorageHandler(HsmStorageHandler2 handler)
+    public void setStorageHandler(NearlineStorageHandler handler)
     {
-        assertNotRunning("Cannot set HSM storage handler after initialization");
+        assertNotRunning("Cannot set storage handler after initialization");
         _storageHandler = handler;
     }
 
@@ -598,12 +602,12 @@ public class PoolV4
         {
             if (_reportOnRemovals && event.getNewState() == EntryState.REMOVED) {
                 try {
-                    CacheEntry entry = event.getEntry();
+                    CacheEntry entry = event.getNewEntry();
                     RemoveFileInfoMessage msg =
                         new RemoveFileInfoMessage(getCellAddress().toString(), entry.getPnfsId());
                     msg.setFileSize(entry.getReplicaSize());
                     msg.setStorageInfo(entry.getFileAttributes().getStorageInfo());
-                    _billingStub.send(msg);
+                    _billingStub.notify(msg);
                 } catch (NoRouteToCellException e) {
                     _log.error("Failed to register removal in billing: {}", e.getMessage());
                 }
@@ -892,7 +896,7 @@ public class PoolV4
     //
     private class ReplyToPoolFetch
         extends DelayedReply
-        implements CacheFileAvailable
+        implements CompletionHandler<Void, PnfsId>
     {
         private final PoolFetchFileMessage _message;
 
@@ -902,50 +906,38 @@ public class PoolV4
         }
 
         @Override
-        public void cacheFileAvailable(PnfsId pnfsId, Throwable ee)
+        public void completed(Void result, PnfsId pnfsId)
         {
-            try {
-                if (ee == null) {
+            _message.setSucceeded();
+            reply(_message);
+        }
+
+        @Override
+        public void failed(Throwable exc, PnfsId pnfsId)
+        {
+            if (exc instanceof CacheException) {
+                CacheException ce = (CacheException) exc;
+                int errorCode = ce.getRc();
+                switch (errorCode) {
+                case CacheException.FILE_IN_CACHE:
+                    _log.info("Pool already contains replica");
                     _message.setSucceeded();
-                } else if (ee instanceof CacheException) {
-                    CacheException ce = (CacheException) ee;
-                    int errorCode = ce.getRc();
+                    break;
+                case CacheException.ERROR_IO_DISK:
+                case 41:
+                case 42:
+                case 43:
+                    disablePool(PoolV2Mode.DISABLED_STRICT, errorCode, ce.getMessage());
                     _message.setFailed(errorCode, ce.getMessage());
-
-                    switch (errorCode) {
-                    case 41:
-                    case 42:
-                    case 43:
-                        disablePool(PoolV2Mode.DISABLED_STRICT, errorCode,
-                                    ce.getMessage());
-                    }
-                } else {
-                    _message.setFailed(1000, ee);
+                    break;
+                default:
+                    _message.setFailed(errorCode, ce.getMessage());
+                    break;
                 }
-            } finally {
-                if (_message.getReturnCode() != 0) {
-                    _log.error("Fetch failed: " +
-                               _message.getErrorObject());
-
-                    /* Something went wrong. We delete the file to be
-                     * on the safe side (better waste tape bandwidth
-                     * than risk leaving a broken file).
-                     */
-                    try {
-                        _repository.setState(pnfsId, EntryState.REMOVED);
-                    } catch (InterruptedException | CacheException e) {
-                        _log.warn("Failed to remove replica: " + e.getMessage());
-                    } catch (IllegalTransitionException e) {
-                        /* Most likely indicates that the file was
-                         * removed before we could do it. Log the
-                         * problem, but otherwise ignore it.
-                         */
-                        _log.warn("Failed to remove replica: " + e.getMessage());
-                    }
-                }
-
-                reply(_message);
+            } else {
+                _message.setFailed(1000, exc);
             }
+            reply(_message);
         }
     }
 
@@ -1091,28 +1083,51 @@ public class PoolV4
         }
 
         FileAttributes fileAttributes = msg.getFileAttributes();
+        String hsm = _hsmSet.getInstanceName(fileAttributes);
         _log.info("Pool {} asked to fetch file {} (hsm={})",
-                _poolName, fileAttributes.getPnfsId(), fileAttributes.getStorageInfo().getHsm());
-        try {
-            ReplyToPoolFetch reply = new ReplyToPoolFetch(msg);
-            _storageHandler.fetch(fileAttributes, reply);
-            return reply;
-        } catch (FileInCacheException e) {
-            _log.warn("Pool already contains replica");
-            msg.setSucceeded();
-            return msg;
-        } catch (CacheException e) {
-            _log.error(e.toString());
-            if (e.getRc() == CacheException.ERROR_IO_DISK) {
-                disablePool(PoolV2Mode.DISABLED_STRICT,
-                        e.getRc(), e.getMessage());
+                _poolName, fileAttributes.getPnfsId(), hsm);
+        ReplyToPoolFetch reply = new ReplyToPoolFetch(msg);
+        _storageHandler.stage(hsm, fileAttributes, reply);
+        return reply;
+    }
+
+    private class RemoveFileReply extends DelayedReply implements CompletionHandler<Void,URI>
+    {
+        private final PoolRemoveFilesFromHSMMessage msg;
+        private final Collection<URI> succeeded;
+        private final Collection<URI> failed;
+
+        private RemoveFileReply(PoolRemoveFilesFromHSMMessage msg)
+        {
+            this.msg = msg;
+            succeeded = new ArrayList<>(msg.getFiles().size());
+            failed = new ArrayList<>();
+        }
+
+        @Override
+        public void completed(Void nil, URI uri)
+        {
+            succeeded.add(uri);
+            sendIfFinished();
+        }
+
+        @Override
+        public void failed(Throwable exc, URI uri)
+        {
+            failed.add(uri);
+            sendIfFinished();
+        }
+
+        private void sendIfFinished()
+        {
+            if (succeeded.size() + failed.size() >= msg.getFiles().size()) {
+                msg.setResult(succeeded, failed);
+                reply(msg);
             }
-            throw e;
         }
     }
 
-    public void messageArrived(CellMessage envelope,
-                               PoolRemoveFilesFromHSMMessage msg)
+    public Reply messageArrived(PoolRemoveFilesFromHSMMessage msg)
         throws CacheException
     {
         if (_poolMode.isDisabled(PoolV2Mode.DISABLED_STAGE)) {
@@ -1125,7 +1140,9 @@ public class PoolV4
             throw new CacheException(CacheException.POOL_DISABLED, "Pool has no tape backend");
         }
 
-        _storageHandler.remove(envelope);
+        RemoveFileReply reply = new RemoveFileReply(msg);
+        _storageHandler.remove(msg.getHsm(), msg.getFiles(), reply);
+        return reply;
     }
 
     public PoolCheckFreeSpaceMessage
@@ -1466,12 +1483,12 @@ public class PoolV4
                                     p2pQueue.getMaxActiveJobs(),
                                     p2pQueue.getQueueSize());
 
-        info.setQueueSizes(_storageHandler.getActiveFetchJobs(),
-                           _suppressHsmLoad ? 0 : _storageHandler.getMaxActiveFetchJobs(),
-                           _storageHandler.getFetchQueueSize(),
-                           _storageHandler.getActiveStoreJobs(),
-                           _suppressHsmLoad ? 0 : _storageHandler.getMaxActiveStoreJobs(),
-                           _storageHandler.getStoreQueueSize());
+        info.setQueueSizes(_suppressHsmLoad ? 0 : _storageHandler.getActiveFetchJobs(),
+                           0,
+                           _suppressHsmLoad ? 0 : _storageHandler.getFetchQueueSize(),
+                           _suppressHsmLoad ? 0 : _storageHandler.getActiveStoreJobs(),
+                           0,
+                           _suppressHsmLoad ? 0 : _storageHandler.getStoreQueueSize());
         return info;
     }
 

@@ -4,6 +4,7 @@ import com.google.common.base.Objects;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Longs;
+import com.google.common.util.concurrent.MoreExecutors;
 import org.junit.Test;
 
 import java.io.Serializable;
@@ -20,6 +21,7 @@ import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -45,17 +47,17 @@ import dmg.cells.nucleus.CellEndpoint;
 import dmg.cells.nucleus.CellInfo;
 import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellMessageAnswerable;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.SerializationException;
-import dmg.util.Args;
 
 import org.dcache.cells.CellMessageDispatcher;
-import dmg.cells.nucleus.CellMessageReceiver;
 import org.dcache.cells.CellStub;
 import org.dcache.pinmanager.model.Pin;
 import org.dcache.poolmanager.PoolInfo;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.poolmanager.PoolSelector;
+import org.dcache.util.Args;
 import org.dcache.vehicles.FileAttributes;
 
 import static org.dcache.pinmanager.model.Pin.State.PINNED;
@@ -111,7 +113,8 @@ public class PinManagerTests
         TestDao dao = new TestDao();
 
         PinRequestProcessor processor = new PinRequestProcessor();
-        processor.setExecutor(new TestExecutor());
+        processor.setScheduledExecutor(new TestExecutor());
+        processor.setExecutor(MoreExecutors.sameThreadExecutor());
         processor.setDao(dao);
         processor.setPoolStub(new TestStub() {
                 public PoolSetStickyMessage messageArrived(PoolSetStickyMessage msg)
@@ -620,7 +623,7 @@ class TestEndpoint implements CellEndpoint, CellMessageReceiver
             Message msg = (Message)o;
 
             /* dCache vehicles can transport errors back to the
-             * requestor, so detect if this is an error reply.
+             * requester, so detect if this is an error reply.
              */
             if (result instanceof CacheException) {
                 CacheException e = (CacheException)result;
@@ -653,6 +656,7 @@ class TestEndpoint implements CellEndpoint, CellMessageReceiver
     @Override
     public void sendMessage(CellMessage envelope,
                             CellMessageAnswerable callback,
+                            Executor executor,
                             long timeout)
         throws SerializationException
     {
@@ -665,20 +669,11 @@ class TestEndpoint implements CellEndpoint, CellMessageReceiver
     }
 
     @Override
-    public CellMessage sendAndWait(CellMessage envelope, long timeout)
-        throws SerializationException,
-               NoRouteToCellException,
-               InterruptedException
+    public void sendMessageWithRetryOnNoRouteToCell(CellMessage envelope, CellMessageAnswerable callback,
+                                                    Executor executor, long timeout)
+            throws SerializationException
     {
-        return process(envelope);
-    }
-
-    @Override
-    public CellMessage sendAndWaitToPermanent(CellMessage envelope, long timeout)
-        throws SerializationException,
-               InterruptedException
-    {
-        return process(envelope);
+        sendMessage(envelope, callback, executor, timeout);
     }
 
     @Override

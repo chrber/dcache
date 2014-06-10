@@ -19,11 +19,11 @@ import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellInfoProvider;
 import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.CellMessageSender;
-import dmg.util.Args;
 import dmg.util.CommandExitException;
 import dmg.util.StreamEngine;
 
 import org.dcache.cells.AbstractCell;
+import org.dcache.util.Args;
 import org.dcache.util.CDCExecutorServiceDecorator;
 import org.dcache.util.SequentialExecutor;
 import org.dcache.util.Transfer;
@@ -65,11 +65,10 @@ public class LineBasedDoor
     {
         super(cellName, args);
 
-        getNucleus().setCallbackExecutor(executor);
         getNucleus().setMessageExecutor(new SequentialExecutor(executor));
         this.interpreterClass = interpreterClass;
         this.engine = engine;
-        this.executor = new CDCExecutorServiceDecorator(executor);
+        this.executor = new CDCExecutorServiceDecorator<>(executor);
 
         try {
             doInit();
@@ -97,6 +96,7 @@ public class LineBasedDoor
         interpreter.setWriter(engine.getWriter());
         interpreter.setRemoteAddress((InetSocketAddress) engine.getSocket().getRemoteSocketAddress());
         interpreter.setLocalAddress((InetSocketAddress) engine.getSocket().getLocalSocketAddress());
+        interpreter.setExecutor(executor);
         if (interpreter instanceof CellMessageSender) {
             ((CellMessageSender) interpreter).setCellEndpoint(this);
         }
@@ -239,7 +239,7 @@ public class LineBasedDoor
     @Override
     public void getInfo(PrintWriter pw)
     {
-        pw.println("    User Host  : " + engine.getInetAddress().getHostAddress());
+        pw.println("     User Host  : " + engine.getInetAddress().getHostAddress());
         if (interpreter instanceof CellInfoProvider) {
             ((CellInfoProvider) interpreter).getInfo(pw);
         }
@@ -253,6 +253,7 @@ public class LineBasedDoor
         void shutdown();
         void setRemoteAddress(InetSocketAddress remoteAddress);
         void setLocalAddress(InetSocketAddress localAddress);
+        void setExecutor(Executor executor);
     }
 
     private class Command implements Runnable

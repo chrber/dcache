@@ -5,30 +5,6 @@
 #  the lifetime of the domain.
 
 
-#
-#  The following looks for the file /etc/emi-version.  If this file is present
-#  then its contents is included in 'info.static'
-#
-onerror continue
-test -f /etc/emi-version
-set env have_emi_version ${rc}
-onerror shutdown
-
-define env defn_emi_version.exe enddefine
-load context emi-version /etc/emi-version
-set env emi-declaration "S,environment.distribution.emi-version,${emi-version}"
-unset context emi-version
-enddefine
-
-define env defn_no_emi_version.exe enddefine
-set env emi-declaration ""
-enddefine
-
-exec env defn_emi_version.exe -ifok=have_emi_version
-exec env defn_no_emi_version.exe -ifnotok=have_emi_version
-
-
-
 #  The 'info.static' context declares static information for the info service
 #  for this domain.  Each line is either a declaration or an empty line.
 #
@@ -54,6 +30,25 @@ exec env defn_no_emi_version.exe -ifnotok=have_emi_version
 #  domains.<domain-name>.static and PATH
 #
 define context info.static enddefine
-${emi-declaration}
+S,user.name,${user.name}
+S,user.language,${user.language}
+S,user.timezone,${user.timezone}
+S,user.country,${user.country}
+
+S,os.version,${os.version}
+S,os.name,${os.name}
+S,os.arch,${os.arch}
+
+S,java.version,${java.version}
+S,java.vendor,${java.vendor}
+S,java.class-version,${java.class.version}
+S,java.runtime-version,${java.runtime.version}
+S,java.specification-version,${java.specification.version}
+
+S,java.vm.version,${java.vm.version}
+S,java.vm.vendor,${java.vm.vendor}
+S,java.vm.name,${java.vm.name}
+S,java.vm.specification-version,${java.vm.specification.version}
+S,java.vm.info,${java.vm.info}
 enddefine
 

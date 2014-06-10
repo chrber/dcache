@@ -63,13 +63,6 @@ COPYRIGHT STATUS:
   obligated to secure any necessary Government licenses before exporting
   documents or software obtained from this server.
  */
-
-/*
- * Job.java
- *
- * Created on March 22, 2004, 11:30 AM
- */
-
 package org.dcache.srm.request;
 
 import com.google.common.collect.Iterables;
@@ -105,7 +98,6 @@ import org.dcache.srm.scheduler.JobStorage;
 import org.dcache.srm.scheduler.JobStorageFactory;
 import org.dcache.srm.scheduler.NonFatalJobFailure;
 import org.dcache.srm.scheduler.Scheduler;
-import org.dcache.srm.scheduler.SchedulerFactory;
 import org.dcache.srm.scheduler.State;
 import org.dcache.srm.util.JDC;
 
@@ -119,7 +111,7 @@ public abstract class Job  {
 
     private static final Logger logger = LoggerFactory.getLogger(Job.class);
 
-    private static final String ISO8601_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXX";
+    protected static final String ISO8601_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXX";
 
     //this is used to build the queue of jobs.
     protected Long nextJobId;
@@ -302,28 +294,11 @@ public abstract class Job  {
     }
 
     /**
-     *  Changes the state of this job to a new state
-     * @param state
-     * @param description
-     * @throws IllegalStateTransition
+     * Changes the state of this job to a new state.
      */
-    public final void setState(State state,String description) throws
-    IllegalStateTransition {
-        setState(state,description,true);
-
-    }
-
-    /**
-         * Changes the state of this job to a new state
-         * @param newState
-         * @param description
-         * @param save
-         * if save is false we do not save state in database
-         * the caller of the save state needs to call saveJob then
-         * @throws IllegalStateTransition
-         */
-    public final void setState(State newState,String description, boolean save) throws
-       IllegalStateTransition {
+    public final void setState(State newState, String description)
+            throws IllegalStateTransition
+    {
         wlock();
         try {
             if (newState == this.state) {
@@ -350,9 +325,7 @@ public abstract class Job  {
                 throw new IllegalStateTransition("Scheduler ID is null");
             }
             stateChanged(oldState);
-            if(save || !oldState.isFinal() && newState.isFinal()) {
-                saveJob();
-            }
+            saveJob();
         } finally {
             wunlock();
         }
@@ -366,14 +339,12 @@ public abstract class Job  {
             return newState == State.DONE
                     || newState == State.CANCELED
                     || newState == State.FAILED
-                    || newState == State.RUNNING
-                    || newState == State.TQUEUED
-                    || newState == State.RESTORED;
+                    || newState == State.TQUEUED;
         case TQUEUED:
             return newState == State.CANCELED
                     || newState == State.FAILED
-                    || newState == State.RUNNING
-                    || newState == State.RESTORED;
+                    || newState == State.PRIORITYTQUEUED
+                    || newState == State.PENDING;
         case PRIORITYTQUEUED:
             return newState == State.CANCELED
                     || newState == State.FAILED
@@ -395,30 +366,26 @@ public abstract class Job  {
                     || newState == State.RUNNING
                     || newState == State.PRIORITYTQUEUED
                     || newState == State.DONE
-                    || newState == State.RETRYWAIT
-                    || newState == State.RESTORED;
+                    || newState == State.RETRYWAIT;
         case RETRYWAIT:
             return newState == State.CANCELED
                     || newState == State.FAILED
-                    || newState == State.RUNNING
-                    || newState == State.PRIORITYTQUEUED
-                    || newState == State.RESTORED;
+                    || newState == State.TQUEUED;
         case RQUEUED:
             return newState == State.CANCELED
                     || newState == State.FAILED
-                    || newState == State.READY
-                    || newState == State.RESTORED;
+                    || newState == State.READY;
         case READY:
             return newState == State.CANCELED
                     || newState == State.FAILED
                     || newState == State.TRANSFERRING
-                    || newState == State.DONE
-                    || newState == State.RESTORED;
+                    || newState == State.DONE;
         case TRANSFERRING:
             return newState == State.CANCELED
                     || newState == State.FAILED
-                    || newState == State.DONE
-                    || newState == State.RESTORED;
+                    || newState == State.DONE;
+        case RESTORED:
+            return newState == State.PRIORITYTQUEUED;
         case FAILED:
         case DONE:
         case CANCELED:
@@ -502,17 +469,22 @@ public abstract class Job  {
         }
 
     }
+
      public String getHistory() {
+         return getHistory("");
+     }
+
+     public String getHistory(String padding) {
         StringBuilder historyStringBuillder = new StringBuilder();
         rlock();
         try {
             SimpleDateFormat format = new SimpleDateFormat(ISO8601_FORMAT);
             for( JobHistory nextHistoryElement: jobHistory ) {
-                 historyStringBuillder.append(" at ");
-                 historyStringBuillder.append(format
+                 historyStringBuillder.append(padding);
+                 historyStringBuillder.append("   ").append(format
                          .format(new Date(nextHistoryElement.getTransitionTime())));
-                 historyStringBuillder.append(" state ").append(nextHistoryElement.getState());
-                 historyStringBuillder.append(" : ");
+                 historyStringBuillder.append(" ").append(nextHistoryElement.getState());
+                 historyStringBuillder.append(": ");
                  historyStringBuillder.append(nextHistoryElement.getDescription());
                  historyStringBuillder.append('\n');
             }
@@ -687,11 +659,7 @@ public abstract class Job  {
                 // we need to save job every time the scheduler is set
                 // even if the jbbc monitoring log is disabled,
                 // as we use scheduler id to identify who this job belongs to.
-                try {
-                        getJobStorage().saveJob(this,true);
-                }catch (DataAccessException sqle) {
-                    logger.error(sqle.toString());
-                }
+                saveJob(true);
             }
         } finally {
             wunlock();
@@ -711,7 +679,7 @@ public abstract class Job  {
         }
     }
 
-    public long extendLifetimeMillis(long newLifetimeInMillis) throws SRMException {
+    protected long extendLifetimeMillis(long newLifetimeInMillis) throws SRMException {
         wlock();
         try {
             if (state.isFinal()){
@@ -798,13 +766,9 @@ public abstract class Job  {
     {
         wlock();
         try {
-            if (creationTime + lifetime < System.currentTimeMillis()) {
-                logger.debug("expiring job #{}", getId());
-                if (state == State.READY || state == State.TRANSFERRING) {
-                    setState(State.DONE, "Request lifetime expired.");
-                } else if (!state.isFinal()) {
-                    setState(State.FAILED, "Request lifetime expired.");
-                }
+            if (creationTime + lifetime < System.currentTimeMillis() && !state.isFinal()) {
+                logger.info("expiring job #{}", getId());
+                setState(State.FAILED, "Request lifetime expired.");
             }
         } catch (IllegalStateTransition e) {
             logger.error("Illegal state transition while expiring job: {}", e.toString());
@@ -872,38 +836,6 @@ public abstract class Job  {
             runlock();
         }
     }
-
-    /**
-     * if the job that has been scheduled for execution at some point in the past\
-     * and then was restored and put in the restored state
-     * then this method will triger rescheduling of this job
-     *
-     * This is needed for the types of the jobs that do not need to be resheduled
-     * unless something else triggers the rescheduling (like clients updating the status
-     * of the job, thus confirming their existance).
-     */
-    public void scheduleIfRestored() {
-        wlock();
-        try {
-         if(getState() == State.RESTORED) {
-                if(schedulerId != null) {
-                    Scheduler scheduler = Scheduler.getScheduler(schedulerId);
-                    if(scheduler != null) {
-                        try
-                        {
-                            scheduler.schedule(this);
-                        }
-                        catch(Exception ie) {
-                            ie.printStackTrace();
-                        }
-                    }
-                }
-            }
-        } finally {
-            wunlock();
-        }
-    }
-
 
     public long getLastStateTransitionTime(){
         rlock();
@@ -1031,18 +963,25 @@ public abstract class Job  {
         return current;
     }
 
+    public Class<? extends Job> getSchedulerType()
+    {
+        return getClass();
+    }
+
     /**
      * This is the initial call to schedule the job for execution
      */
-    public void schedule() throws InterruptedException,IllegalStateTransition
+    public void scheduleWith(Scheduler scheduler) throws InterruptedException,
+            IllegalStateTransition
     {
         wlock();
         try{
-            if(!State.PENDING.equals(state)) {
-                throw new IllegalStateException("State is not pending");
+            if(state != State.PENDING) {
+                throw new IllegalStateException("Job " +
+                        getClass().getSimpleName() + " [" + this.getId() +
+                        "] has state " + state + "(not PENDING)");
             }
-            Scheduler scheduler = SchedulerFactory.getSchedulerFactory().getScheduler(this);
-            this.setScheduler(scheduler.getId(), 0);
+            setScheduler(scheduler.getId(), scheduler.getTimestamp());
             scheduler.schedule(this);
         } finally {
             wunlock();
@@ -1133,4 +1072,73 @@ public abstract class Job  {
     }
 
     public abstract void toString(StringBuilder sb, boolean longformat);
+
+
+    /**
+     * Method called when the SRM is started and a job has been restored from
+     * some JobStorage (such as a DatabaseJobStorage) and the job is in a
+     * non-final state.
+     */
+    public void onSrmRestart(Scheduler scheduler)
+    {
+        wlock();
+        try {
+            if (state.isFinal()) {
+                return;
+            }
+
+            if (getRemainingLifetime() == 0) {
+                setState(State.FAILED, "Expired during SRM service restart");
+                return;
+            }
+
+            switch (state) {
+            // Pending jobs were never worked on before the SRM restart; we
+            // simply schedule them now.
+            case TQUEUED:
+                setState(State.PENDING, "Restarting request.");
+                scheduler.schedule(this);
+                break;
+
+            case PENDING:
+                scheduler.schedule(this);
+                break;
+
+            // Jobs in RQUEUED or READY states require no further processing.
+            // We can leave them for the client to discover the TURL or place
+            // the job into the DONE state, respectively.
+            case READY:
+            case RQUEUED:
+                scheduler.add(this);
+                break;
+
+            // Other job states need request-specific recovery process.
+            default:
+                onSrmRestartForActiveJob(scheduler);
+                break;
+            }
+        } catch (IllegalStateTransition e) {
+            logger.error("Failed to restore job: " + e.getMessage());
+        } finally {
+            wunlock();
+        }
+    }
+
+    /**
+     * Provide request-specific recovery for jobs that were being processed
+     * when SRM was restarted.  This corresponds to jobs in states:
+     *
+     *     PRIORITYTQUEUED, TQUEUED, RUNNING, RETRYWAIT, ASYNCWAIT,
+     *     TRANSFERRING, RESTORED, RUNNINGWITHOUTTHREAD.
+     *
+     * In general, such jobs require some request-specific procedure.
+     * Subclasses are expected to override this method to provide this
+     * procedure.
+     */
+    protected void onSrmRestartForActiveJob(Scheduler scheduler)
+            throws IllegalStateTransition
+    {
+        // By default, simply fail such requests.
+        setState(State.FAILED, "Aborted due to SRM service restart");
+    }
 }

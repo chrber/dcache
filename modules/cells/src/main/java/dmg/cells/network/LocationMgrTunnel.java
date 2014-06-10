@@ -29,9 +29,9 @@ import dmg.cells.nucleus.MessageEvent;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.RoutedMessageEvent;
 import dmg.cells.nucleus.SerializationException;
-import dmg.util.Args;
 import dmg.util.StreamEngine;
 
+import org.dcache.util.Args;
 import org.dcache.util.Version;
 
 /**
@@ -136,7 +136,7 @@ public class LocationMgrTunnel
                 CellPath retAddr = msg.getSourcePath().revert();
                 CellExceptionMessage ret = new CellExceptionMessage(retAddr, e);
                 ret.setLastUOID(msg.getUOID());
-                _nucleus.sendMessage(ret);
+                _nucleus.sendMessage(ret, true, true);
             }
         } catch (NoRouteToCellException f) {
             _log.warn("Unable to deliver message and unable to return it to sender: " + msg);

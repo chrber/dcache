@@ -16,6 +16,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FileExistsCacheException;
@@ -46,6 +47,7 @@ import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.nucleus.SerializationException;
 
 import org.dcache.cells.CellStub;
+import org.dcache.namespace.FileAttribute;
 import org.dcache.namespace.FileType;
 import org.dcache.namespace.ListHandler;
 import org.dcache.util.ChecksumType;
@@ -199,7 +201,7 @@ public class RemoteNameSpaceProviderTests
     {
         givenSuccessfulResponse();
 
-        _namespace.createFile(ROOT, "/path/to/file", 100, 200, 0644);
+        _namespace.createFile(ROOT, "/path/to/file", 100, 200, 0644, EnumSet.noneOf(FileAttribute.class));
 
         PnfsCreateEntryMessage sent =
                 getSingleSendAndWaitMessage(PnfsCreateEntryMessage.class);
@@ -217,7 +219,7 @@ public class RemoteNameSpaceProviderTests
     {
         givenFailureResponse(FILE_EXISTS);
 
-        _namespace.createFile(ROOT, "/path/to/file", 100, 200, 0644);
+        _namespace.createFile(ROOT, "/path/to/file", 100, 200, 0644, EnumSet.noneOf(FileAttribute.class));
     }
 
 
@@ -670,7 +672,7 @@ public class RemoteNameSpaceProviderTests
         givenSuccessfulResponse();
 
         _namespace.setFileAttributes(ROOT, A_PNFSID,
-                attributes().size(1000).build());
+                attributes().size(1000).build(), EnumSet.noneOf(FileAttribute.class));
 
         PnfsSetFileAttributes sent =
                 getSingleSendAndWaitMessage(PnfsSetFileAttributes.class);
@@ -689,7 +691,7 @@ public class RemoteNameSpaceProviderTests
         givenFailureResponse(FILE_NOT_FOUND);
 
         _namespace.setFileAttributes(ROOT, A_PNFSID,
-                attributes().size(1000).build());
+                attributes().size(1000).build(), EnumSet.noneOf(FileAttribute.class));
     }
 
     /*
@@ -753,8 +755,8 @@ public class RemoteNameSpaceProviderTests
 
         for(int i = 0; i < replies.length; i++) {
             Collection<DirectoryEntry> entries = replies [i];
-            boolean isLast = i == replies.length -1;
-            CellMessage reply = buildListReply(request, entries, isLast);
+            boolean isLast = i == (replies.length - 1);
+            CellMessage reply = buildListReply(request, entries, isLast, replies.length);
 
             messages.add((PnfsListDirectoryMessage) reply.getMessageObject());
         }
@@ -764,14 +766,16 @@ public class RemoteNameSpaceProviderTests
 
 
     private static CellMessage buildListReply(CellMessage request,
-            final Collection<DirectoryEntry> entries, final boolean isLast)
+            final Collection<DirectoryEntry> entries, final boolean isLast, final int cnt)
     {
         return buildReply(request, new Modifier<PnfsListDirectoryMessage>(){
             @Override
             public void modify(PnfsListDirectoryMessage reply)
             {
                 reply.setEntries(entries);
-                reply.setFinal(isLast);
+                if (isLast) {
+                    reply.setSucceeded(cnt);
+                }
             }
         }, SUCCESSFUL);
     }
@@ -829,21 +833,16 @@ public class RemoteNameSpaceProviderTests
 
     private void givenResponse(final Modifier... modifiers)
     {
-        try {
-            given(_endpoint.sendAndWait(any(CellMessage.class), anyLong())).
-                    willAnswer(new Answer() {
-
-                @Override
-                public Object answer(InvocationOnMock invocation) throws Throwable
-                {
-                    CellMessage request = (CellMessage) invocation.getArguments() [0];
-                    return buildReply(request, modifiers);
-                }
-
-            });
-        } catch (InterruptedException | NoRouteToCellException | SerializationException e) {
-            throw new RuntimeException(e);
-        }
+        willAnswer(new Answer() {
+            @Override
+            public Object answer(InvocationOnMock invocation) throws Throwable
+            {
+                CellMessage request = (CellMessage) invocation.getArguments()[0];
+                CellMessageAnswerable callback = (CellMessageAnswerable) invocation.getArguments()[1];
+                callback.answerArrived(request, buildReply(request, modifiers));
+                return null;
+            }
+        }).given(_endpoint).sendMessage(any(CellMessage.class), any(CellMessageAnswerable.class), any(Executor.class), anyLong());
     }
 
 
@@ -896,15 +895,10 @@ public class RemoteNameSpaceProviderTests
                 ArgumentCaptor.forClass(CellMessage.class);
 
         try {
-            verify(_endpoint).sendAndWait(argument.capture(), anyLong());
+            verify(_endpoint).sendMessage(argument.capture(), any(CellMessageAnswerable.class), any(Executor.class), anyLong());
 
-            verify(_endpoint, never()).
-                    sendAndWaitToPermanent(any(CellMessage.class), anyLong());
             verify(_endpoint, never()).sendMessage(any(CellMessage.class));
-            verify(_endpoint, never()).
-                    sendMessage(any(CellMessage.class),
-                    any(CellMessageAnswerable.class), anyLong());
-        } catch (NoRouteToCellException | InterruptedException e) {
+        } catch (NoRouteToCellException e) {
             throw new RuntimeException(e);
         }
 
@@ -919,24 +913,14 @@ public class RemoteNameSpaceProviderTests
      */
     private <T extends PnfsMessage> T getSingleSentMessage(Class<T> type)
     {
-        ArgumentCaptor<CellMessage> argument =
-                ArgumentCaptor.forClass(CellMessage.class);
-
         try {
+            ArgumentCaptor<CellMessage> argument =
+                    ArgumentCaptor.forClass(CellMessage.class);
             verify(_endpoint).sendMessage(argument.capture());
-
-            verify(_endpoint, never()).
-                    sendAndWait(any(CellMessage.class), anyLong());
-            verify(_endpoint, never()).
-                    sendAndWaitToPermanent(any(CellMessage.class), anyLong());
-            verify(_endpoint, never()).
-                    sendMessage(any(CellMessage.class),
-                    any(CellMessageAnswerable.class), anyLong());
-        } catch (NoRouteToCellException | InterruptedException e) {
+            return type.cast(argument.getValue().getMessageObject());
+        } catch (NoRouteToCellException e) {
             throw new RuntimeException(e);
         }
-
-        return type.cast(argument.getValue().getMessageObject());
     }
 
 

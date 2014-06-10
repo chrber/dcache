@@ -12,6 +12,7 @@ import java.net.Socket;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.StringTokenizer;
+import java.util.concurrent.ExecutionException;
 
 import dmg.cells.nucleus.CellAdapter;
 import dmg.cells.nucleus.CellMessage;
@@ -24,8 +25,9 @@ import dmg.protocols.ssh.SshRsaKeyContainer;
 import dmg.protocols.ssh.SshServerAuthentication;
 import dmg.protocols.ssh.SshSharedKey;
 import dmg.protocols.ssh.SshStreamEngine;
-import dmg.util.Args;
 import dmg.util.StreamEngine;
+
+import org.dcache.util.Args;
 
 /**
  **
@@ -293,19 +295,19 @@ public class       SshLoginManager
         request[4] = password ;
         CellMessage msg = new CellMessage( path , request ) ;
         try{
-            msg = sendAndWait( msg , 4000 ) ;
+            msg = getNucleus().sendAndWait(msg, (long) 4000);
             if( msg == null ){
                _log.warn( "request for user >"+user+"< timed out" ) ;
                return false ;
             }
-        }catch(NoRouteToCellException e ){
+        }catch(NoRouteToCellException | InterruptedException e ){
             _log.warn( "Problem for user >"+user+"< : "+e ) ;
             return false ;
-        }catch(InterruptedException e ){
-            _log.warn( "Problem for user >"+user+"< : "+e ) ;
+        } catch (ExecutionException e) {
+            _log.warn( "Problem for user >"+user+"< : "+e.getCause() ) ;
             return false ;
         }
-        Object obj;
+         Object obj;
         if( ( obj = msg.getMessageObject() ) == null ){
            _log.warn( "Request response is null" ) ;
            return false ;

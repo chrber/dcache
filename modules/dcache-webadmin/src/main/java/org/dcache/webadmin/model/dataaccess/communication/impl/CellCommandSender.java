@@ -1,5 +1,6 @@
 package org.dcache.webadmin.model.dataaccess.communication.impl;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +50,8 @@ public class CellCommandSender implements CommandSender {
             Serializable message = messageRequest.getPayload();
             CellPath destination = messageRequest.getDestination();
             Class payloadType = messageRequest.getPayloadType();
-            _cellStub.send(destination, message, payloadType, callback);
+            CellStub.addCallback(_cellStub.send(destination, message, payloadType),
+                                 callback, MoreExecutors.sameThreadExecutor());
         }
         _log.debug("messages send");
     }
@@ -120,7 +122,7 @@ public class CellCommandSender implements CommandSender {
         }
 
         @Override
-        public void timeout(CellPath path) {
+        public void timeout(String error) {
             processFailure();
             setAnswered();
         }

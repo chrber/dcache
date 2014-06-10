@@ -8,7 +8,7 @@ import java.util.Enumeration;
 import java.util.NoSuchElementException;
 import java.util.StringTokenizer;
 
-import dmg.util.Args;
+import org.dcache.util.Args;
 import dmg.util.AuthorizedArgs;
 import dmg.util.CommandInterpreter;
 
@@ -265,6 +265,10 @@ public class AclCommander extends CommandInterpreter {
         Exception( "Not all databases are open" ) ;
     }
     public Object exec( String line ) throws Exception {
+
+      if (line.trim().isEmpty()) {
+        return "";
+      }
 
       if( _user.equals( "none" ) ) {
           return command(new Args(line));

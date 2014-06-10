@@ -1,6 +1,3 @@
-//$Id$
-//$Log: not supported by cvs2svn $
-
 /*
 COPYRIGHT STATUS:
 Dec 1st 2001, Fermi National Accelerator Laboratory (FNAL) documents and
@@ -67,21 +64,15 @@ obligated to secure any necessary Government licenses before exporting
 documents or software obtained from this server.
  */
 
-/*
- * AbstractStorageElement.java
- *
- * Created on January 10, 2003, 12:37 PM
- */
-
 package org.dcache.srm;
 
+import com.google.common.util.concurrent.CheckedFuture;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import java.net.URI;
 import java.util.List;
-
-import diskCacheV111.srm.StorageElementInfo;
 
 import org.dcache.srm.v2_2.TMetaDataSpace;
 
@@ -128,83 +119,102 @@ public interface AbstractStorageElement {
     /** This method has to be called to get the transport URL for file operation.
      * The returned value is passed to the user and user does actual data transfer
      * @param user User ID
-     * @param surl SURL
+     * @param fileId File ID as provided by prepareToPut
      * @param protocols List of SE supported protocols
+     * @param previousTurl The transport URL received from the previous call of getPutTurl
      * @throws SRMException
      * @return Transport URL for file operation
      */
-    public URI getPutTurl(SRMUser user, URI surl, String[] protocols)
-        throws SRMException;
-
-    /** To accomodate the property of dcache that requires that the same client get all
-     * dcap transfers though the same dcap door, we put the get(Get/Put)Turl which has
-     * this siganture.
-     * The previous_turl is the turl that was obtained by the client before.
-     * @param user User ID
-     * @param surl SURL
-     * @param previous_turl The transport URL received from the previous call of getPutTurl
-     * @throws SRMException
-     * @return Transport URL for file operation
-     */
-    public URI getPutTurl(SRMUser user, URI surl, URI previous_turl)
+    URI getPutTurl(SRMUser user, String fileId, String[] protocols, URI previousTurl)
         throws SRMException;
 
     /** This method has to be called to get the transport URL for file operation.
      * The returned value is passed to the user and user does actual data transfer
      * @param user User ID
-     * @param filePath File path
+     * @param surl Site url
      * @param protocols
+     * @param previousTurl The transport URL received from the previous call of getGetTurl
      * @throws SRMException
      * @return Transport URL for file operation
      */
-    public URI getGetTurl(SRMUser user, URI surl, String[] protocols)
+    URI getGetTurl(SRMUser user, URI surl, String[] protocols, URI previousTurl)
         throws SRMException;
 
-    /** To accomodate the property of dcache that requires that the same client get all
-     * dcap transfers though the same dcap door, we put the get(Get/Put)Turl which has
-     * this siganture.
-     * The previous_turl is the turl that was obtained by the client before.
+    /**
+     * Prepares the storage element for uploading a file.
+     *
      * @param user User ID
-     * @param surl SURL
-     * @param previous_turl The transport URL received from the previous call of getPutTurl
-     * @throws SRMException
-     * @return Transport URL for file operation
-     */
-    public URI getGetTurl(SRMUser user, URI surl, URI previous_turl)
-        throws SRMException;
-
-    /** Method must be nonblocking -- when called it creates thread and returns immediately,
-     *         result will be sent thru callbacks
-     * @param user User ID
-     * @param surl SURL
-     * @param callbacks This interface is used for asyncronous notification of SRM of the
+     * @param surl Site URL
+     * @param size Optional file size
+     * @param accessLatency Optional access latency
+     * @param retentionPolicy Optional retention policy
+     * @param spaceToken Optional space token
      * @param overwrite allow overwrite if true
-     * various actions performed to put file from the storage
+     * @return Opaque file identifier expected as a argument to several other methods
      */
-    public void prepareToPut(SRMUser user, URI surl,
-            PrepareToPutCallbacks callbacks,
-            boolean overwrite);
+    CheckedFuture<String, ? extends SRMException> prepareToPut(SRMUser user,
+                                                               URI surl,
+                                                               @Nullable Long size,
+                                                               @Nullable String accessLatency,
+                                                               @Nullable String retentionPolicy,
+                                                               @Nullable String spaceToken,
+                                                               boolean overwrite);
+
+    /**
+     * Commits an upload to the storage element. After this call the file is accessible
+     * for download.
+     *
+     * @param user User ID
+     * @param fileId File ID as provided by prepareToPut
+     * @param surl Site URL
+     * @param overwrite If true the new file may overwrite an existing SURL
+     */
+    void putDone(SRMUser user, String fileId, URI surl, boolean overwrite) throws SRMException;
+
+    /**
+     * Abort an upload.
+     *
+     * Any uploads to the TURL are discarded.
+     *
+     * @param user User ID
+     * @param fileId File ID as provided by prepareToPut
+     * @param surl Site URL
+     * @param reason explanation why the request was aborted
+     * @throws SRMException
+     */
+    void abortPut(SRMUser user, String fileId, URI surl, String reason) throws SRMException;
+
 
     /** This method allows to pin file in the Storage Element,
      * i.e. put the file in "fast access state"
-     * @param user User ID
-     * @param surl
-     * @param network address from which file will be read
+     * @param user user ID
+     * @param surl site URL
+     * @param clientHost network address from which file will be read
      *        null, if unknown
-     * @param pinLifetime Requested pin operation lifetime in millis
-     * @param requestToken - pin will save request token
+     * @param pinLifetime requested pin operation lifetime in milliseconds
+     * @param requestToken pin will save request token
      *        so that unpinning by file name and request token can take place
-     * @param callbacks This interface is used for asynchronous notification of SRM of the
-     * various actions performed to "pin" file in the storage
      */
+    public CheckedFuture<Pin, ? extends SRMException> pinFile(SRMUser user,
+                                                              URI surl,
+                                                              String clientHost,
+                                                              long pinLifetime,
+                                                              String requestToken);
 
+    /**
+     * Contains the result of a pin operation.
+     */
+    public class Pin
+    {
+        public final FileMetaData fileMetaData;
+        public final String pinId;
 
-    public void pinFile(SRMUser user,
-           URI surl,
-           String clientHost,
-           long pinLifetime,
-           String requestToken,
-           PinCallbacks callbacks);
+        public Pin(FileMetaData fileMetaData, String pinId)
+        {
+            this.fileMetaData = fileMetaData;
+            this.pinId = pinId;
+        }
+    }
 
     /**
      * @param user User ID
@@ -217,27 +227,16 @@ public interface AbstractStorageElement {
     throws SRMException ;
 
     /**
-     * @param user User ID
-     * @param path File path
-     * @param size
-     * @param callbacks This interface is used for asyncronous notification of SRM of the
-     * various actions performed to put file into reserved space in the storage
-     */
-    public void prepareToPutInReservedSpace(SRMUser user, String path,  long size,
-            long spaceReservationToken,    PrepareToPutInSpaceCallbacks callbacks);
-
-
-    /**
      *this method perform a transfer from the remote transfer url to the local file, specified by actualFilePath
      * this method can return the string identifier of the pending transfer, and then notify about the
      * completeon of the transfer asynchronously, though the callbacks interface
      *
      *
+     *
      * @param user User ID
-     * @param remoteTURL
-     * @param surl
+     * @param remoteTURL Transfer URL
+     * @param fileId File ID as provided by prepareToPut
      * @param remoteUser
-     * @param remoteCredetial
      * @param callbacks
      * @throws SRMException
      * @return transfer id
@@ -246,38 +245,9 @@ public interface AbstractStorageElement {
     public String getFromRemoteTURL(
             SRMUser user,
             URI remoteTURL,
-            URI surl,
+            String fileId,
             SRMUser remoteUser,
             Long requestCredentialId,
-            CopyCallbacks callbacks)
-            throws SRMException;
-
-    /**
-     *this method perform a transfer from the remote transfer url to the local file, specified by actualFilePath
-     * this method can return the string identifier of the pending transfer, and then notify about the
-     * completeon of the transfer asynchronously, though the callbacks interface
-     * this variant is used when the size of the file to be transfered is known and the
-     * space has been reserved
-     *
-     *
-     * @param user User ID
-     * @param remoteTURL
-     * @param surl
-     * @param remoteUser
-     * @param remoteCredetial
-     * @param callbacks
-     * @throws SRMException
-     * @return transfer id
-     *  an id to the pending tranfer that can be used to cancel the transfer via killRemoteTransfer
-     */
-    public String getFromRemoteTURL(
-            SRMUser user,
-            URI remoteTURL,
-            URI surl,
-            SRMUser remoteUser,
-            Long requestCredentialId,
-            String spaceReservationId,
-            long size,
             CopyCallbacks callbacks)
             throws SRMException;
 
@@ -312,12 +282,14 @@ public interface AbstractStorageElement {
 
 
     /**
+     * Initiates an internal copy of a file in the storage element.
+     *
      * @param user User ID
-     * @param fromSurl
-     * @param toSurl
+     * @param fromSurl Local site URL
+     * @param fileId File ID as provided by prepareToPut
      * @throws SRMException
      */
-    public void localCopy(SRMUser user, URI fromSurl, URI toSurl)
+    public void localCopy(SRMUser user, URI fromSurl, String fileId)
     throws SRMException;
 
     /**
@@ -352,6 +324,23 @@ public interface AbstractStorageElement {
         throws SRMException;
 
     /**
+     * Retrieves the FileMetaData of a file being uploaded.
+     *
+     * @param user User ID
+     * @param surl Site URL
+     * @param fileId File ID as provided by prepareToPut
+     * @return FileMetaData of the file
+     * @throws SRMAuthorizationException if the user lacks sufficient
+     *         privileges
+     * @throws SRMInvalidPathException if the file does not exist
+     * @throws SRMInternalErrorException in case of transient errors
+     * @throws SRMException for any other error
+     */
+    @Nonnull
+    public FileMetaData getFileMetaData(SRMUser user, URI surl, String fileId)
+            throws SRMException;
+
+    /**
      * @param user User ID
      * @param path
      * @return
@@ -363,31 +352,29 @@ public interface AbstractStorageElement {
      * i.e. cancel the request to have the file in "fast access state"
      * @param user User ID
      * @param fileId Storage Element internal file ID
-     * @param callbacks This interface is used for asyncronous notification of SRM of the
-     * various actions performed to "unpin" file in the storage
      * @param pinId Unique id received during pinFile operation (?)
+     * @return A promise of an ID of the pin that was released
      */
-    public void unPinFile(SRMUser user,String fileId,UnpinCallbacks callbacks,String pinId);
+    public CheckedFuture<String, ? extends SRMException> unPinFile(
+            SRMUser user, String fileId, String pinId);
 
     /** This method allows to unpin file in the Storage Element,
      * i.e. cancel the request to have the file in "fast access state"
      * @param user User ID
      * @param fileId Storage Element internal file ID
-     * @param callbacks This interface is used for asyncronous notification of SRM of the
-     * various actions performed to "unpin" file in the storage
      * @param requestToken id given to the storage  during pinFile operation
+     * @return A promise of an ID of the pin that was released
      */
-    public void unPinFileBySrmRequestId(SRMUser user,String fileId,
-            UnpinCallbacks callbacks,
-            String requestToken);
+    public CheckedFuture<String, ? extends SRMException> unPinFileBySrmRequestId(
+            SRMUser user, String fileId, String requestToken);
+
     /** Unpin all pins on this file that user has permission to unpin
      * @param user Authorization Record of the user
      * @param fileId Storage Element internal file ID
-     * @param callbacks This interface is used for asyncronous notification of SRM of the
-     * various actions performed to "unpin" file in the storage
+     * @return A promise of an ID of the pin that was released
      */
-    public void unPinFile(SRMUser user,String fileId,
-            UnpinCallbacks callbacks);
+    public CheckedFuture<String, ? extends SRMException> unPinFile(
+            SRMUser user, String fileId);
 
     /** This method tells SE that the specified file can be removed from the storage.
      * This is up to SE to decide when the file will be deleted
@@ -471,14 +458,6 @@ public interface AbstractStorageElement {
      * various actions performed to reserve space in the storage
      */
 
-
-    /** This method returns the information about the Storage Element
-     * @param user User ID
-     * @throws SRMException
-     * @return StorageElementInfo object contained information about the Storage Element
-     */
-    public StorageElementInfo getStorageElementInfo(SRMUser user) throws SRMException;
-
     /**
      *
      * @param user
@@ -555,35 +534,6 @@ public interface AbstractStorageElement {
 
     /**
      *
-     * @param user
-     * @param spaceToken
-     * @param surl
-     * @param sizeInBytes
-     * @param useLifetime
-     * @param callbacks
-     */
-    public void srmMarkSpaceAsBeingUsed(SRMUser user,
-                                        String spaceToken,
-                                        URI surl,
-                                        long sizeInBytes,
-                                        long useLifetime,
-                                        boolean overwrite,
-                                        SrmUseSpaceCallbacks callbacks);
-
-    /**
-     *
-     * @param user
-     * @param spaceToken
-     * @param surl
-     * @param callbacks
-     */
-    public void srmUnmarkSpaceAsBeingUsed(SRMUser user,
-                                          String spaceToken,
-                                          URI surl,
-                                          SrmCancelUseOfSpaceCallbacks callbacks);
-
-    /**
-     *
      * @param spaceTokens
      * @throws SRMException
      * @return
@@ -611,15 +561,6 @@ public interface AbstractStorageElement {
 
     public long srmExtendReservationLifetime(SRMUser user, String spaceToken, long newReservationLifetime)
     throws SRMException ;
-   /**
-     *
-     * @param description
-     * @throws SRMException
-     * @return
-     */
-    @Nonnull
-    public String[] srmGetRequestTokens(SRMUser user,String description)
-        throws SRMException;
 
     /**
      *
@@ -632,7 +573,4 @@ public interface AbstractStorageElement {
     throws SRMException;
 
     public String getStorageBackendVersion();
-
-    public boolean exists(SRMUser user, URI surl)
-            throws SRMInternalErrorException, SRMInvalidPathException;
 }

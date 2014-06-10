@@ -12,6 +12,7 @@ import io.milton.http.HttpManager;
 import io.milton.http.Request;
 import io.milton.http.ResourceFactory;
 import io.milton.resource.Resource;
+import io.milton.servlet.ServletRequest;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.slf4j.Logger;
@@ -63,21 +64,20 @@ import diskCacheV111.vehicles.IoDoorInfo;
 import diskCacheV111.vehicles.PnfsCreateEntryMessage;
 import diskCacheV111.vehicles.ProtocolInfo;
 
+import dmg.cells.nucleus.AbstractCellComponent;
+import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellMessage;
+import dmg.cells.nucleus.CellMessageReceiver;
 import dmg.cells.nucleus.NoRouteToCellException;
 import dmg.cells.services.login.LoginManagerChildrenInfo;
-import dmg.util.Args;
 
 import org.dcache.auth.SubjectWrapper;
 import org.dcache.auth.Subjects;
-import dmg.cells.nucleus.AbstractCellComponent;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
-import org.dcache.auth.LoginReply;
 import org.dcache.cells.CellStub;
 import org.dcache.missingfiles.AlwaysFailMissingFileStrategy;
 import org.dcache.missingfiles.MissingFileStrategy;
 import org.dcache.namespace.FileAttribute;
+import org.dcache.util.Args;
 import org.dcache.util.PingMoversTask;
 import org.dcache.util.RedirectedTransfer;
 import org.dcache.util.Slf4jSTErrorListener;
@@ -88,9 +88,6 @@ import org.dcache.util.list.DirectoryEntry;
 import org.dcache.util.list.DirectoryListPrinter;
 import org.dcache.util.list.ListDirectoryHandler;
 import org.dcache.vehicles.FileAttributes;
-import org.dcache.auth.attributes.HomeDirectory;
-import org.dcache.auth.attributes.LoginAttribute;
-import org.dcache.auth.attributes.RootDirectory;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Arrays.asList;
@@ -108,6 +105,8 @@ public class DcacheResourceFactory
 {
     private static final Logger _log =
         LoggerFactory.getLogger(DcacheResourceFactory.class);
+
+    public static final String TRANSACTION_ATTRIBUTE = "org.dcache.transaction";
 
     private static final Set<FileAttribute> REQUIRED_ATTRIBUTES =
         EnumSet.of(TYPE, PNFSID, CREATION_TIME, MODIFICATION_TIME, SIZE,
@@ -771,17 +770,12 @@ public class DcacheResourceFactory
      * objects.
      */
     public List<DcacheResource> list(final FsPath path)
-        throws InterruptedException, CacheException, URISyntaxException
+        throws InterruptedException, CacheException
     {
         if (!_isAnonymousListingAllowed && Subjects.isNobody(getSubject())) {
             throw new PermissionDeniedCacheException("Access denied");
         }
 
-        Request request = HttpManager.request();
-        final LoginReply login = (LoginReply) request.getAuthorization().getTag();
-        final FsPath root = getUserRoot(login);
-        final String basePath = new URI(request.getAbsoluteUrl()).getPath();
-        final String requestPath = root.toString() + "/" + basePath;
         final List<DcacheResource> result = new ArrayList<>();
         DirectoryListPrinter printer =
             new DirectoryListPrinter()
@@ -795,12 +789,12 @@ public class DcacheResourceFactory
                 @Override
                 public void print(FsPath dir, FileAttributes dirAttr, DirectoryEntry entry)
                 {
-                    result.add(getResource(new FsPath(new FsPath(basePath), entry.getName()),
+                    result.add(getResource(new FsPath(path, entry.getName()),
                                            entry.getFileAttributes()));
                 }
             };
 
-        _list.printDirectory(getSubject(), printer, new FsPath(requestPath), null,
+        _list.printDirectory(getSubject(), printer, path, null,
                              Range.<Integer>all());
         return result;
     }
@@ -817,14 +811,21 @@ public class DcacheResourceFactory
             throw new PermissionDeniedCacheException("Access denied");
         }
 
-        final Request request = HttpManager.request();
-        final LoginReply login = (LoginReply)request.getAuthorization().getTag();
-        final FsPath root = getUserRoot(login);
-        final String basePath = new URI(request.getAbsoluteUrl()).getPath();
-        final String requestPath = root.toString()  + "/"+ basePath;
+        Request request = HttpManager.request();
+        String requestPath = new URI(request.getAbsoluteUrl()).getPath();
         String[] base =
             Iterables.toArray(PATH_SPLITTER.split(requestPath), String.class);
         final ST t = _listingGroup.getInstanceOf(HTML_TEMPLATE_NAME);
+
+        if (t == null) {
+            _log.error("template '{}' not found in templategroup: {}",
+                    HTML_TEMPLATE_NAME, _listingGroup.getFileName());
+            out.append(DcacheResponseHandler.templateNotFoundErrorPage(_listingGroup,
+                    HTML_TEMPLATE_NAME));
+            out.flush();
+            return;
+        }
+
         t.add("path", asList(UrlPathWrapper.forPaths(base)));
         t.add("static", _staticContentPath);
         t.add("subject", new SubjectWrapper(getSubject()));
@@ -851,7 +852,7 @@ public class DcacheResourceFactory
                                 attr.getSize());
                     }
                 };
-        _list.printDirectory(getSubject(), printer, new FsPath(requestPath), null,
+        _list.printDirectory(getSubject(), printer, path, null,
                              Range.<Integer>all());
 
         t.write(new AutoIndentWriter(out));
@@ -877,9 +878,9 @@ public class DcacheResourceFactory
                 new DoorRequestInfoMessage(getCellAddress().toString(), "remove");
             Subject subject = getSubject();
             infoRemove.setSubject(subject);
-            infoRemove.setPath(path.toString());
+            infoRemove.setPath(path);
             infoRemove.setClient(Subjects.getOrigin(subject).getAddress().getHostAddress());
-            _billingStub.send(infoRemove);
+            _billingStub.notify(infoRemove);
         } catch (NoRouteToCellException e) {
             _log.error("Cannot send remove message to billing: {}",
                        e.getMessage());
@@ -1014,9 +1015,7 @@ public class DcacheResourceFactory
      */
     private FsPath getFullPath(String path)
     {
-        Request request = HttpManager.request();
-        final LoginReply login = (LoginReply) request.getAuthorization().getTag();
-        return new FsPath(getUserRoot(login), path);
+        return new FsPath(_rootPath, new FsPath(path));
     }
 
     /**
@@ -1166,6 +1165,9 @@ public class DcacheResourceFactory
             super(pnfs, subject, path);
             initializeTransfer(this, subject);
             _clientAddressForPool = getClientAddress();
+
+            ServletRequest.getRequest().setAttribute(TRANSACTION_ATTRIBUTE,
+                    getTransaction());
         }
 
         protected ProtocolInfo createProtocolInfo(InetSocketAddress address)
@@ -1363,19 +1365,5 @@ public class DcacheResourceFactory
                 notifyBilling(error.getRc(), error.getMessage());
             }
         }
-    }
-
-    private static FsPath getUserRoot(LoginReply login) {
-        FsPath userRoot = new FsPath();
-        FsPath userHome = new FsPath();
-        for (LoginAttribute attribute : login.getLoginAttributes()) {
-            if (attribute instanceof RootDirectory) {
-                userRoot = new FsPath(((RootDirectory) attribute).getRoot());
-            } else if (attribute instanceof HomeDirectory) {
-                userHome = new FsPath(((HomeDirectory) attribute).getHome());
-            }
-        }
-
-        return new FsPath(userRoot, userHome);
     }
 }

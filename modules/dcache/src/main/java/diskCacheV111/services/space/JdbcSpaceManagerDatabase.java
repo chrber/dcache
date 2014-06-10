@@ -29,7 +29,6 @@ import java.util.Objects;
 import java.util.Set;
 
 import diskCacheV111.util.AccessLatency;
-import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.RetentionPolicy;
 import diskCacheV111.util.VOInfo;
@@ -53,7 +52,7 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
     ----------------------+--------------------------+-----------
      id                   | bigint                   | not null
      name                 | character varying(32672) |
-     freespaceinbytes     | bigint                   | not null
+     availablespaceinbytes| bigint                   | not null
      lastupdatetime       | bigint                   |
      onlineallowed        | integer                  |
      nearlineallowed      | integer                  |
@@ -104,11 +103,8 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
      spacereservationid | bigint                   | not null
      sizeinbytes        | bigint                   | not null
      creationtime       | bigint                   | not null
-     expirationtime     | bigint                   |
-     pnfspath           | character varying(32672) | unique
      pnfsid             | character varying(36)    | unique
      state              | integer                  | not null
-     deleted            | integer                  |
     */
     private static final String SPACEFILE_TABLE = "srmspacefile";
 
@@ -146,14 +142,14 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
             LinkGroup lg = new LinkGroup();
             lg.setId(set.getLong("id"));
             lg.setName(set.getString("name"));
-            lg.setFreeSpace(set.getLong("freeSpaceInBytes"));
-            lg.setUpdateTime(set.getLong("lastUpdateTime"));
-            lg.setOnlineAllowed(set.getBoolean("onlineAllowed"));
-            lg.setNearlineAllowed(set.getBoolean("nearlineAllowed"));
-            lg.setReplicaAllowed(set.getBoolean("replicaAllowed"));
-            lg.setOutputAllowed(set.getBoolean("outputAllowed"));
-            lg.setCustodialAllowed(set.getBoolean("custodialAllowed"));
-            lg.setReservedSpaceInBytes(set.getLong("reservedspaceinbytes"));
+            lg.setAvailableSpace(set.getLong("availablespaceinbytes"));
+            lg.setUpdateTime(set.getLong("lastupdatetime"));
+            lg.setOnlineAllowed(set.getBoolean("onlineallowed"));
+            lg.setNearlineAllowed(set.getBoolean("nearlineallowed"));
+            lg.setReplicaAllowed(set.getBoolean("replicaallowed"));
+            lg.setOutputAllowed(set.getBoolean("outputallowed"));
+            lg.setCustodialAllowed(set.getBoolean("custodialallowed"));
+            lg.setReservedSpace(set.getLong("reservedspaceinbytes"));
             List<VOInfo> vos = getJdbcTemplate().query(
                     "SELECT voGroup,voRole FROM " + LINKGROUP_VO_TABLE + " WHERE linkGroupId=?", voInfoMapper,
                     lg.getId());
@@ -168,18 +164,14 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
         public File mapRow(ResultSet set, int rowNum) throws SQLException
         {
             String pnfsId = set.getString("pnfsId");
-            String path = set.getString("pnfspath");
             return new File(set.getLong("id"),
                             set.getString("vogroup"),
                             set.getString("vorole"),
                             set.getLong("spacereservationid"),
                             set.getLong("sizeinbytes"),
                             set.getLong("creationtime"),
-                            toNull(set.getLong("expirationtime"), set.wasNull()),
-                            (path != null) ? new FsPath(path) : null,
                             (pnfsId != null) ? new PnfsId(pnfsId) : null,
-                            FileState.valueOf(set.getInt("state")),
-                            (set.getObject("deleted") != null) && set.getInt("deleted") == 1);
+                            FileState.valueOf(set.getInt("state")));
         }
     };
 
@@ -279,18 +271,6 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
         }
     }
 
-    @Override @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = EmptyResultDataAccessException.class)
-    public File selectFileForUpdate(FsPath path)
-    {
-        try {
-            return getJdbcTemplate().queryForObject(
-                    "SELECT * FROM " + SPACEFILE_TABLE + " WHERE pnfspath = ? FOR UPDATE ",
-                    fileMapper, path.toString());
-        } catch (EmptyResultDataAccessException e) {
-            throw new EmptyResultDataAccessException("Space reservation for " + path + " not found.", 1, e);
-        }
-    }
-
     @Override
     public Space updateSpace(Space space)
             throws DataAccessException
@@ -334,7 +314,7 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
                             linkGroupName);
             id = group.getId();
             getJdbcTemplate().update(
-                    "UPDATE " + LINKGROUP_TABLE + " SET freeSpaceInBytes=?,lastUpdateTime=?,onlineAllowed=?,nearlineAllowed=?,"
+                    "UPDATE " + LINKGROUP_TABLE + " SET availableSpaceInBytes=?-reservedSpaceInBytes,lastUpdateTime=?,onlineAllowed=?,nearlineAllowed=?,"
                             + "replicaAllowed=?,outputAllowed=?,custodialAllowed=? WHERE  id = ?",
                     freeSpace,
                     updateTime,
@@ -359,7 +339,7 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
                                  */
                                 PreparedStatement stmt = con.prepareStatement(
                                         "INSERT INTO " + LINKGROUP_TABLE
-                                                + " (name, freeSpaceInBytes, lastUpdateTime, onlineAllowed,"
+                                                + " (name, availableSpaceInBytes, lastUpdateTime, onlineAllowed,"
                                                 + " nearlineAllowed, replicaAllowed, outputAllowed, custodialAllowed,reservedspaceinbytes)"
                                                 + " VALUES (?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
                                 stmt.setString(1, linkGroupName);
@@ -525,15 +505,12 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
     {
         int rc = getJdbcTemplate().update(
                 "UPDATE " + SPACEFILE_TABLE +
-                        " SET vogroup=?, vorole=?, sizeinbytes=?, expirationtime=?, pnfspath=?, pnfsid=?, state=?, deleted=? WHERE id=?",
+                        " SET vogroup=?, vorole=?, sizeinbytes=?, pnfsid=?, state=? WHERE id=?",
                 f.getVoGroup(),
                 f.getVoRole(),
                 f.getSizeInBytes(),
-                f.getExpirationTime(),
-                Objects.toString(f.getPath(), null),
                 Objects.toString(f.getPnfsId(), null),
                 f.getState().getStateId(),
-                f.isDeleted() ? 1 : 0,
                 f.getId());
         if (rc != 1) {
             throw new JdbcUpdateAffectedIncorrectNumberOfRowsException("Update failed, row count=" + rc, 1, rc);
@@ -557,9 +534,9 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
             " ( lgvo.VORole = ? OR lgvo.VORole = '*' ) ";
 
     private static final String spaceCondition =
-            " lg.freespaceinbytes-lg.reservedspaceinbytes >= ? ";
+            " lg.availablespaceinbytes >= ? ";
     private static final String orderBy =
-            " ORDER BY lg.freespaceinbytes-lg.reservedspaceinbytes DESC ";
+            " ORDER BY lg.availablespaceinbytes DESC ";
 
     private static final String selectLinkGroupIdPart1 =
             "SELECT lg.id FROM " + LINKGROUP_TABLE + " lg, " + LINKGROUP_VO_TABLE + " lgvo " +
@@ -745,14 +722,6 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
     }
 
     @Override
-    public File findFile(FsPath path) throws DataAccessException
-    {
-        List<File> results = getJdbcTemplate().query("SELECT * FROM " + SPACEFILE_TABLE + " WHERE pnfspath=?",
-                                                     fileMapper, path.toString());
-        return DataAccessUtils.singleResult(results);
-    }
-
-    @Override
     public LinkGroupCriterion linkGroups()
     {
         return new LinkGroupCriterionImpl();
@@ -842,9 +811,8 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
                            final String voGroup,
                            final String voRole,
                            final long sizeInBytes,
-                           final long lifetime,
-                           final FsPath path,
-                           final PnfsId pnfsId)
+                           final PnfsId pnfsId,
+                           final FileState state)
             throws DataAccessException, SpaceException
     {
         final long creationTime = System.currentTimeMillis();
@@ -877,17 +845,15 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
                  */
                 PreparedStatement stmt = con.prepareStatement(
                         "INSERT INTO " + SPACEFILE_TABLE
-                                + " (vogroup,vorole,spacereservationid,sizeinbytes,creationtime,expirationtime,pnfspath,pnfsid,state,deleted) "
-                                + " VALUES  (?,?,?,?,?,?,?,?,?,0)", Statement.RETURN_GENERATED_KEYS);
+                                + " (vogroup,vorole,spacereservationid,sizeinbytes,creationtime,pnfsid,state) "
+                                + " VALUES  (?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
                 stmt.setString(1, voGroup);
                 stmt.setString(2, voRole);
                 stmt.setLong(3, reservationId);
                 stmt.setLong(4, sizeInBytes);
                 stmt.setLong(5, creationTime);
-                stmt.setObject(6, (lifetime == -1) ? null : creationTime + lifetime);
-                stmt.setString(7, Objects.toString(path, null));
-                stmt.setString(8, Objects.toString(pnfsId, null));
-                stmt.setInt(9, FileState.ALLOCATED.getStateId());
+                stmt.setString(6, Objects.toString(pnfsId, null));
+                stmt.setInt(7, state.getStateId());
                 return stmt;
             }
         }, keyHolder);
@@ -1112,20 +1078,6 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
         }
 
         @Override
-        public FileCriterion whereDeletedIs(boolean deleted)
-        {
-            addClause("deleted = ?", deleted ? 1 : 0);
-            return this;
-        }
-
-        @Override
-        public FileCriterion wherePathMatches(Glob pattern)
-        {
-            whereFieldMatches("pnfspath", pattern);
-            return this;
-        }
-
-        @Override
         public FileCriterion wherePnfsIdIs(PnfsId pnfsId)
         {
             addClause("pnfsid = ?", pnfsId.toString());
@@ -1141,9 +1093,9 @@ public class JdbcSpaceManagerDatabase extends JdbcDaoSupport implements SpaceMan
         }
 
         @Override
-        public FileCriterion thatExpireBefore(long millis)
+        public FileCriterion whereCreationTimeIsBefore(long millis)
         {
-            addClause("expirationtime < ?", millis);
+            addClause("creationtime < ?", millis);
             return this;
         }
     }

@@ -16,8 +16,9 @@ import diskCacheV111.pools.PoolCostInfo;
 import diskCacheV111.pools.StorageClassFlushInfo;
 
 import dmg.cells.nucleus.CellAdapter;
-import dmg.util.Args;
 import dmg.util.CommandInterpreter;
+
+import org.dcache.util.Args;
 
 /**
  * @author Patrick Fuhrmann patrick.fuhrmann@desy.de
@@ -94,6 +95,9 @@ public class HandlerExample implements HsmFlushSchedulable {
      @Override
      public void command( Args args  ){
          _log.info("command : "+args);
+         if (args.argc() == 0) {
+             return;
+         }
          try{
 
              Object reply = _interpreter.command( args ) ;

@@ -41,6 +41,8 @@ public class LogIn extends BasePage {
     private static final Logger _log = LoggerFactory.getLogger(LogIn.class);
     private static final long serialVersionUID = 8902191632839916396L;
 
+    private Class<? extends Page> returnPage;
+
     private class LogInForm extends StatelessForm {
 
         private class CertSignInButton extends Button {

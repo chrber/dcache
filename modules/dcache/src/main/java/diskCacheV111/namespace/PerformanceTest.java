@@ -23,10 +23,9 @@ import diskCacheV111.util.PnfsId;
 import diskCacheV111.util.RetentionPolicy;
 import diskCacheV111.vehicles.StorageInfo;
 
-import dmg.util.Args;
-
 import org.dcache.auth.Subjects;
 import org.dcache.namespace.FileAttribute;
+import org.dcache.util.Args;
 import org.dcache.util.Checksum;
 import org.dcache.util.ChecksumType;
 import org.dcache.vehicles.FileAttributes;
@@ -204,7 +203,7 @@ public class PerformanceTest extends Thread
             FileAttributes fileAttributes;
             switch (aOp) {
                 case CREATE_ENTRY:
-                    provider.createFile(Subjects.ROOT, path, UID, GID, PERMISSION);
+                    provider.createFile(Subjects.ROOT, path, UID, GID, PERMISSION, EnumSet.noneOf(FileAttribute.class));
                     break;
                 case PATH_TO_PNFS_ID:
                     getPnfsid(path);
@@ -226,7 +225,8 @@ public class PerformanceTest extends Thread
                 case ADD_CHECKSUM:
                     fileAttributes = new FileAttributes();
                     fileAttributes.setChecksums(Collections.singleton(CHECKSUM));
-                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path), fileAttributes);
+                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path),
+                            fileAttributes, EnumSet.noneOf(FileAttribute.class));
                     break;
                 case GET_CHECKSUMS:
                     Set<Checksum> cksums = provider.getFileAttributes(Subjects.ROOT, getPnfsid(path), EnumSet.of(FileAttribute.CHECKSUM)).getChecksums();
@@ -235,7 +235,8 @@ public class PerformanceTest extends Thread
                     fileAttributes = new FileAttributes();
                     fileAttributes.setAccessLatency(AccessLatency.ONLINE);
                     fileAttributes.setRetentionPolicy(RetentionPolicy.REPLICA);
-                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path), fileAttributes);
+                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path),
+                            fileAttributes, EnumSet.noneOf(FileAttribute.class));
                     break;
                 case GET_FILE_ATTR:
                     provider.getFileAttributes(Subjects.ROOT, getPnfsid(path), EnumSet.of(FileAttribute.FLAGS));
@@ -257,7 +258,8 @@ public class PerformanceTest extends Thread
                     info.addLocation(new URI("osm://hsm/?store=test&group=disk&bdif=1234"));
                     FileAttributes attributesToUpdate = new FileAttributes();
                     attributesToUpdate.setStorageInfo(info);
-                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path), attributesToUpdate);
+                    provider.setFileAttributes(Subjects.ROOT, getPnfsid(path),
+                            attributesToUpdate, EnumSet.noneOf(FileAttribute.class));
                     break;
                 default: break;
             }//switch

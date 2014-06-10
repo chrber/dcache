@@ -67,13 +67,20 @@ import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.core.Appender;
 import ch.qos.logback.core.AppenderBase;
 import ch.qos.logback.core.spi.AppenderAttachable;
-import org.apache.log4j.MDC;
+import com.google.common.base.Charsets;
+import com.google.common.collect.Maps;
+import com.google.common.io.Files;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.datanucleus.api.jdo.JDOPersistenceManagerFactory;
 import org.jdom.Document;
 import org.jdom.Element;
 import org.jdom.JDOMException;
 import org.jdom.input.SAXBuilder;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.slf4j.Marker;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -104,17 +111,31 @@ import org.dcache.alarms.dao.impl.DataNucleusLogEntryStore;
 public class LogEntryAppender extends AppenderBase<ILoggingEvent> implements
                 AppenderAttachable<ILoggingEvent> {
 
-    private final Properties properties = new Properties();
+    public static final String EMPTY_XML_STORE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<entries></entries>\n";
+
+    /**
+     * Fixed names, used for appenders in the logback-server.xml file.
+     */
+    public static final String ALARM_MAIL_APPENDER = "ALARM_MAIL";
+    public static final String HISTORY_APPENDER = "HISTORY";
+
     private final Map<String, AlarmDefinition> definitions
         = Collections.synchronizedMap(new TreeMap<String, AlarmDefinition>());
     private final Map<String, Appender<ILoggingEvent>> childAppenders
         = Collections.synchronizedMap(new HashMap<String, Appender<ILoggingEvent>>());
 
     private ILogEntryDAO store;
-    private String path;
+    private File path;
     private String propertiesPath;
     private String definitionsPath;
     private String currentDomain;
+    private String url;
+    private String user;
+    private String password;
+    private boolean sendEmail;
+    private boolean writeHistory;
+    private JDOPersistenceManagerFactory pmf;
+    private HikariDataSource dataSource;
 
     public void addAlarmType(AlarmDefinition definition) {
         definitions.put(definition.getType(), definition);
@@ -167,12 +188,12 @@ public class LogEntryAppender extends AppenderBase<ILoggingEvent> implements
         this.definitionsPath = definitionsPath;
     }
 
-    public void setDriver(String driver) {
-        properties.setProperty("datanucleus.ConnectionDriverName", driver);
+    public void setSendEmail(boolean sendEmail) {
+        this.sendEmail = sendEmail;
     }
 
     public void setPass(String pass) {
-        properties.setProperty("datanucleus.ConnectionPassword", pass);
+        this.password = pass;
     }
 
     public void setPropertiesPath(String propertiesPath) {
@@ -180,15 +201,19 @@ public class LogEntryAppender extends AppenderBase<ILoggingEvent> implements
     }
 
     public void setStorePath(String path) {
-        this.path = path;
+        this.path = new File(path);
     }
 
     public void setUrl(String url) {
-        properties.setProperty("datanucleus.ConnectionURL", url);
+        this.url = url;
     }
 
     public void setUser(String user) {
-        properties.setProperty("datanucleus.ConnectionUserName", user);
+        this.user = user;
+    }
+
+    public void setWriteHistory(boolean writeHistory) {
+        this.writeHistory = writeHistory;
     }
 
     @Override
@@ -205,26 +230,90 @@ public class LogEntryAppender extends AppenderBase<ILoggingEvent> implements
             }
 
             if (store == null) {
-                if (propertiesPath != null
-                                && propertiesPath.trim().length() > 0) {
-                    File file = new File(propertiesPath);
-                    if (!file.exists()) {
-                        throw new FileNotFoundException(file.getAbsolutePath());
-                    }
-                    try (InputStream stream = new FileInputStream(file)) {
-                        properties.load(stream);
-                    }
-                }
-                store = new DataNucleusLogEntryStore(path, properties);
+                initPersistenceManagerFactory();
+                store = new DataNucleusLogEntryStore(pmf);
             }
 
-            for (Appender<ILoggingEvent> child : childAppenders.values()) {
+            /*
+             * The logback-server.xml is set to add the email and history
+             * appenders, for ease of configuration through standard
+             * dcache properties; hence if use of these is set to false
+             * via enable properties, they must be removed here.
+             */
+            if (!sendEmail) {
+                childAppenders.remove(ALARM_MAIL_APPENDER);
+            }
+
+            if (!writeHistory) {
+                childAppenders.remove(HISTORY_APPENDER);
+            }
+
+            for (Appender<ILoggingEvent> child : childAppenders.values() ) {
                 child.start();
             }
 
             super.start();
         } catch ( JDOMException | IOException t) {
             throw new RuntimeException(t);
+        }
+    }
+
+    @Override
+    public void stop()
+    {
+        super.stop();
+        store = null;
+        if (pmf != null) {
+            pmf.close();
+            pmf = null;
+        }
+        if (dataSource != null) {
+            dataSource.shutdown();
+            dataSource = null;
+        }
+    }
+
+    private void initPersistenceManagerFactory() throws IOException
+    {
+        Properties properties = new Properties();
+        if (propertiesPath != null && !propertiesPath.trim().isEmpty()) {
+            File file = new File(propertiesPath);
+            if (!file.exists()) {
+                throw new FileNotFoundException(file.getAbsolutePath());
+            }
+            try (InputStream stream = new FileInputStream(file)) {
+                properties.load(stream);
+            }
+        }
+
+        if (url.startsWith("xml:")) {
+            initializeXmlFile(path);
+            properties.setProperty("datanucleus.ConnectionURL", url);
+        } else if (url.startsWith("jdbc:")) {
+            HikariConfig config = new HikariConfig();
+            config.setDataSource(new DriverManagerDataSource(url, user, password));
+            dataSource = new HikariDataSource(config);
+            properties.setProperty("datanucleus.connectionPoolingType", "None");
+        }
+        pmf = new JDOPersistenceManagerFactory(
+                Maps.<String, Object>newHashMap(Maps.fromProperties(properties)));
+        if (dataSource != null) {
+            pmf.setConnectionFactory(dataSource);
+        }
+    }
+
+    /**
+     * Checks for the existence of the file and creates it if not. Note that
+     * existing files are not validated against any schema, explicit or
+     * implicit. If the parent does not exist, an exception will be thrown.
+     */
+    private void initializeXmlFile(File file) throws IOException {
+        if (!file.exists()) {
+            if (!file.getParentFile().isDirectory()) {
+                String parent = file.getParentFile().getAbsolutePath();
+                throw new FileNotFoundException(parent + " is not a directory");
+            }
+            Files.write(EMPTY_XML_STORE, file, Charsets.UTF_8);
         }
     }
 

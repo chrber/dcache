@@ -11,7 +11,8 @@ import java.util.Enumeration;
 import dmg.cells.nucleus.CellAdapter;
 import dmg.cells.nucleus.CellMessage;
 import dmg.cells.nucleus.CellNucleus;
-import dmg.util.Args;
+
+import org.dcache.util.Args;
 import dmg.util.Authorizable;
 import dmg.util.AuthorizedString;
 import dmg.util.CommandPanicException;
@@ -137,6 +138,10 @@ public class       UserSecurityCell
        if( ( user == null ) || ( user.length() == 0 ) ) {
            throw new
                    Exception("Not authenticated");
+       }
+
+       if (command.trim().isEmpty()) {
+           return "";
        }
        try{
           return command( new Args( command + " -auth="+user ) ) ;

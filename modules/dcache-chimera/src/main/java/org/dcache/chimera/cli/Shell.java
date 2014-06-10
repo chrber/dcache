@@ -17,23 +17,14 @@
  */
 package org.dcache.chimera.cli;
 
-import com.google.common.base.Charsets;
-import com.google.common.io.CharStreams;
-import com.google.common.io.LineProcessor;
-import jline.ANSIBuffer;
-import jline.ConsoleReader;
+import com.google.common.base.Optional;
+import com.google.common.primitives.Booleans;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import java.io.BufferedInputStream;
-import java.io.Closeable;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintStream;
 import java.io.Serializable;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -41,19 +32,12 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
-import dmg.util.Args;
-import dmg.util.CommandException;
-import dmg.util.CommandExitException;
-import dmg.util.CommandInterpreter;
-import dmg.util.CommandSyntaxException;
-import dmg.util.CommandThrowableException;
 import dmg.util.command.Argument;
 import dmg.util.command.Command;
-import dmg.util.command.HelpFormat;
+import dmg.util.command.Option;
 
 import org.dcache.acl.ACE;
 import org.dcache.acl.ACLException;
@@ -62,27 +46,25 @@ import org.dcache.chimera.ChimeraFsException;
 import org.dcache.chimera.DirectoryStreamB;
 import org.dcache.chimera.FileNotFoundHimeraFsException;
 import org.dcache.chimera.FileSystemProvider;
+import org.dcache.chimera.FsFactory;
 import org.dcache.chimera.FsInode;
 import org.dcache.chimera.HimeraDirectoryEntry;
 import org.dcache.chimera.NotDirChimeraException;
 import org.dcache.chimera.UnixPermission;
 import org.dcache.chimera.posix.Stat;
+import org.dcache.util.Args;
 import org.dcache.util.Checksum;
 import org.dcache.util.ChecksumType;
+import org.dcache.util.cli.ShellApplication;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Strings.padStart;
 import static com.google.common.io.ByteStreams.toByteArray;
 import static java.util.Arrays.asList;
 
-public class Shell implements Closeable
+public class Shell extends ShellApplication
 {
     private final FileSystemProvider fs;
-    private final CommandInterpreter commandInterpreter;
-    private final ConsoleReader console = new ConsoleReader();
-    private final boolean isAnsiSupported;
-    private final boolean hasConsole;
     private String path = "/";
     private FsInode pwd;
 
@@ -93,29 +75,11 @@ public class Shell implements Closeable
             System.exit(4);
         }
 
+        Args args = new Args(arguments);
+        args.shift(FsFactory.ARGC);
+
         try (Shell shell = new Shell(arguments)) {
-            Args args = new Args(arguments);
-            if (args.hasOption("h")) {
-                System.out.println("Usage: chimera [-e] [-f=<file>]|[-]|[COMMAND]");
-                System.out.println();
-                System.out.println("Use 'chimera help' for an overview of available commands.");
-                System.exit(0);
-            } else if (args.hasOption("f")) {
-                try (InputStream in = new FileInputStream(args.getOption("f"))) {
-                    shell.execute(new BufferedInputStream(in), System.out, args.hasOption("e"));
-                }
-            } else if (args.argc() > FsFactory.ARGC) {
-                args.shift(FsFactory.ARGC);
-                if (args.argc() == 1 && args.argv(0).equals("-")) {
-                    shell.execute(System.in, System.out, args.hasOption("e"));
-                } else {
-                    shell.execute(args);
-                }
-            } else if (!shell.hasConsole) {
-                shell.execute(System.in, System.out, args.hasOption("e"));
-            } else {
-                shell.console();
-            }
+            shell.start(args);
         }
     }
 
@@ -123,100 +87,24 @@ public class Shell implements Closeable
     {
         fs = FsFactory.createFileSystem(args);
         pwd = fs.path2inode(path);
-        commandInterpreter = new CommandInterpreter(this);
-        hasConsole = System.console() != null;
-        isAnsiSupported = console.getTerminal().isANSISupported() && hasConsole;
+    }
+
+    @Override
+    protected String getCommandName()
+    {
+        return "chimera";
+    }
+
+    @Override
+    protected String getPrompt()
+    {
+        return "chimera:" + path + "# ";
     }
 
     @Override
     public void close() throws IOException
     {
         fs.close();
-    }
-
-    public void execute(InputStream in, final PrintStream out, final boolean echo) throws IOException
-    {
-        CharStreams.readLines(
-                new InputStreamReader(in, Charsets.US_ASCII),
-                new LineProcessor<Object>()
-                {
-                    @Override
-                    public boolean processLine(String line) throws IOException
-                    {
-                        try {
-                            if (echo) {
-                                out.println(line);
-                            }
-                            String s = Objects.toString(commandInterpreter.command(new Args(line)), null);
-                            if (!isNullOrEmpty(s)) {
-                                out.println(s);
-                            }
-                            return true;
-                        } catch (CommandException e) {
-                            throw new IOException(e);
-                        }
-                    }
-
-                    @Override
-                    public Object getResult()
-                    {
-                        return null;
-                    }
-                });
-    }
-
-    public void execute(Args args) throws Throwable
-    {
-        String out;
-        try {
-            if (isAnsiSupported && args.argc() > 0) {
-                if (args.argv(0).equals("help")) {
-                    args.shift();
-                    args = new Args("help -format=" + HelpFormat.ANSI + " " + args.toString());
-                }
-            }
-            try {
-                out = Objects.toString(commandInterpreter.command(args), null);
-            } catch (CommandThrowableException e) {
-                throw e.getCause();
-            }
-        } catch (ChimeraFsException e) {
-            out = new ANSIBuffer().red(e.getMessage()).toString(isAnsiSupported);
-        } catch (CommandSyntaxException e) {
-            ANSIBuffer sb = new ANSIBuffer();
-            sb.red("Syntax error: " + e.getMessage() + "\n");
-            String help  = e.getHelpText();
-            if (help != null) {
-                sb.append(help);
-            }
-            out = sb.toString(isAnsiSupported);
-        } catch (CommandExitException e) {
-            throw e;
-        } catch (Exception e) {
-            out = new ANSIBuffer().red(e.toString()).toString(isAnsiSupported);
-        }
-        if (!isNullOrEmpty(out)) {
-            console.printString(out);
-            if (out.charAt(out.length() - 1) != '\n') {
-                console.printNewline();
-            }
-            console.flushConsole();
-        }
-    }
-
-    public void console() throws Throwable
-    {
-        try {
-            while (true) {
-                String prompt = new ANSIBuffer().bold("chimera:" + path + "# ").toString(isAnsiSupported);
-                String str = console.readLine(prompt);
-                if (str == null) {
-                    break;
-                }
-                execute(new Args(str));
-            }
-        } catch (CommandExitException ignored) {
-        }
     }
 
     @Nonnull
@@ -228,16 +116,6 @@ public class Shell implements Closeable
             return fs.path2inode(path.toString());
         } else {
             return fs.path2inode(path.toString(), pwd);
-        }
-    }
-
-    @Command(name = "exit", hint = "exit chimera shell")
-    public class ExitComamnd implements Callable<Serializable>
-    {
-        @Override
-        public Serializable call() throws CommandExitException
-        {
-            throw new CommandExitException();
         }
     }
 
@@ -257,7 +135,7 @@ public class Shell implements Closeable
     }
 
     @Command(name = "chgrp", hint = "change file group",
-             usage = "The chgrp command sets the group ID of PATH to GID. Mapped group names " +
+             description = "The chgrp command sets the group ID of PATH to GID. Mapped group names " +
                      "cannot be used.")
     public class ChgrpCommand implements Callable<Serializable>
     {
@@ -276,7 +154,7 @@ public class Shell implements Closeable
     }
 
     @Command(name = "chmod", hint = "change file mode",
-             usage = "The chmod command modifies the file mode bits of PATH to MODE. The MODE must " +
+             description = "The chmod command modifies the file mode bits of PATH to MODE. The MODE must " +
                      "be expressed as an octal bit mask.")
     public class ChmodCommand implements Callable<Serializable>
     {
@@ -295,7 +173,7 @@ public class Shell implements Closeable
     }
 
     @Command(name = "chown", hint = "change file owner and group",
-             usage = "The chown command sets the owner of PATH to UID. Mapped user names " +
+             description = "The chown command sets the owner of PATH to UID. Mapped user names " +
                      "cannot be used.")
     public class ChownCommand implements Callable<Serializable>
     {
@@ -352,6 +230,8 @@ public class Shell implements Closeable
     @Command(name = "ls", hint = "list directory contents")
     public class LsCommand implements Callable<Serializable>
     {
+        private static final String DEFAULT_TIME = "mtime";
+
         /* The block size is purely nominal; we use 1k here as historically
          * filesystems have used a 1k block size. */
         private final int BLOCK_SIZE = 1024;
@@ -373,11 +253,35 @@ public class Shell implements Closeable
         private final long sixMonthsInPast = sixMonthsInPast();
         private final long oneHourInFuture = oneHourInFuture();
 
+        @Option(name = "time", values = { "access", "use", "atime", "status", "ctime", "modify", "mtime", "create" },
+                usage = "Show alternative time instead of modification time: access/use/atime is the last access time, " +
+                        "status/ctime is the last file status modification time, modify/mtime is the last write time, " +
+                        "create is the creation time.")
+        String time = DEFAULT_TIME;
+
+        @Option(name = "c",
+                usage = "Use time of last modification of the file status information instead of last modification " +
+                        "of the file itself.")
+        boolean ctime;
+
+        @Option(name = "u",
+                usage = "Use time of last access instead of last modification of the file.")
+        boolean atime;
+
         @Argument(required = false)
         File path;
 
+        @Override
         public Serializable call() throws IOException
         {
+            checkArgument(Booleans.countTrue(atime, ctime, time != DEFAULT_TIME) <= 1,
+                          "Conflicting time arguments.");
+            if (ctime) {
+                time = "ctime";
+            } else if (atime) {
+                time = "atime";
+            }
+
             List<HimeraDirectoryEntry> entries = new LinkedList<>();
 
             long totalBlocks = 0;
@@ -422,13 +326,34 @@ public class Shell implements Closeable
         {
             if (entry != null) {
                 Stat stat = entry.getStat();
+                long time;
+                switch (this.time) {
+                case "access":
+                case "atime":
+                case "use":
+                    time = stat.getATime();
+                    break;
+                case "status":
+                case "ctime":
+                    time = stat.getCTime();
+                    break;
+                case "modify":
+                case "mtime":
+                    time = stat.getMTime();
+                    break;
+                case "created":
+                    time = stat.getCrTime();
+                    break;
+                default:
+                    throw new IllegalArgumentException("Unknown time field: " + this.time);
+                }
                 String s = String.format("%s %s %s %s %s %s %s",
                                          permissionsFor(stat),
                                          pad(stat.getNlink(), nlinkWidth),
                                          pad(stat.getUid(), uidWidth),
                                          pad(stat.getGid(), gidWidth),
                                          pad(stat.getSize(), sizeWidth),
-                                         dateOf(stat.getMTime()),
+                                         dateOf(time),
                                          entry.getName());
 
                 console.printString(s);
@@ -573,8 +498,39 @@ public class Shell implements Closeable
         }
     }
 
+    @Command(name = "mv", hint = "move file",
+             description = "Renames or moves SOURCE to TARGET. If TARGET is a directory, the source " +
+                     "file is moved into TARGET.")
+    public class MvCommand implements Callable<Serializable>
+    {
+        @Argument(index = 0, metaVar = "source",
+                  usage = "File to move or rename.")
+        File source;
+
+        @Argument(index = 1, metaVar = "target",
+                  usage = "Target path or directory.")
+        File destination;
+
+        @Override
+        public Serializable call() throws ChimeraFsException
+        {
+            FsInode dst;
+            try {
+                dst = lookup(destination);
+            } catch (FileNotFoundHimeraFsException e) {
+                dst = null;
+            }
+            if (dst != null && dst.isDirectory()) {
+                fs.move(lookup(source.getParentFile()), source.getName(), lookup(destination), source.getName());
+            } else {
+                fs.move(lookup(source.getParentFile()), source.getName(), lookup(destination.getParentFile()), destination.getName());
+            }
+            return null;
+        }
+    }
+
     @Command(name = "rm", hint = "remove a file",
-             usage = "The rm command deletes the file.  If the file has data " +
+             description = "The rm command deletes the file.  If the file has data " +
                      "stored in dCache then dCache will remove that data in a " +
                      "timely fashion.")
     public class RmCommand implements Callable<Serializable>
@@ -697,7 +653,7 @@ public class Shell implements Closeable
     }
 
     @Command(name = "setfacl", hint = "change access control lists",
-             usage = "Sets a new ACL consisting of one or more ACEs to a resource (a file or directory), " +
+             description = "Sets a new ACL consisting of one or more ACEs to a resource (a file or directory), " +
                      "which is defined by its pnfsId or globalPath.\n\n" +
 
                      "Each ACE defines permissions to access this resource " +
@@ -825,7 +781,7 @@ public class Shell implements Closeable
     }
 
     @Command(name = "writedata", hint = "write file content",
-             usage = "Be aware that such data is stored in the Chimera database and not in dCache. " +
+             description = "Be aware that such data is stored in the Chimera database and not in dCache. " +
                      "The data will not be accessible through dCache.")
     public class WriteDataCommand implements Callable<Serializable>
     {
@@ -878,12 +834,9 @@ public class Shell implements Closeable
         public Serializable call() throws IOException
         {
             FsInode inode = lookup(path);
-            for (ChecksumType type : ChecksumType.values()) {
-                String checksum = fs.getInodeChecksum(inode, type.getType());
-                if (checksum != null) {
-                    console.printString(type.getName() + ":" + checksum);
+            for (Checksum checksum : fs.getInodeChecksums(inode)) {
+                    console.printString(checksum.getType().getName() + ":" + checksum.getValue());
                     console.printNewline();
-                }
             }
             return null;
         }
@@ -902,11 +855,12 @@ public class Shell implements Closeable
         public Serializable call() throws IOException
         {
             FsInode inode = lookup(path);
-            String checksum = fs.getInodeChecksum(inode, type.getType());
-            if (checksum == null) {
-                console.printString("No checksum of type " + type.getName());
+            Optional<Checksum> checksum = Checksum.forType(fs.getInodeChecksums(inode), type);
+
+            if (checksum.isPresent()) {
+                console.printString(checksum.get().getValue());
             } else {
-                console.printString(checksum);
+                console.printString("No checksum of type " + type.getName());
             }
             console.printNewline();
             return null;

@@ -1,5 +1,7 @@
 package org.dcache.pool.p2p;
 
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +31,7 @@ import diskCacheV111.util.CacheFileAvailable;
 import diskCacheV111.util.ChecksumFactory;
 import diskCacheV111.util.FileInCacheException;
 import diskCacheV111.util.PnfsId;
+import diskCacheV111.util.TimeoutCacheException;
 import diskCacheV111.vehicles.DoorTransferFinishedMessage;
 import diskCacheV111.vehicles.HttpDoorUrlInfoMessage;
 import diskCacheV111.vehicles.HttpProtocolInfo;
@@ -37,9 +40,11 @@ import diskCacheV111.vehicles.Pool2PoolTransferMsg;
 import diskCacheV111.vehicles.PoolDeliverFileMessage;
 
 import dmg.cells.nucleus.CellPath;
+import dmg.cells.nucleus.NoRouteToCellException;
 
 import org.dcache.cells.AbstractMessageCallback;
 import org.dcache.cells.CellStub;
+import org.dcache.namespace.FileAttribute;
 import org.dcache.pool.classic.ChecksumModule;
 import org.dcache.pool.repository.EntryState;
 import org.dcache.pool.repository.ReplicaDescriptor;
@@ -50,6 +55,7 @@ import org.dcache.util.FireAndForgetTask;
 import org.dcache.vehicles.FileAttributes;
 import org.dcache.vehicles.PnfsGetFileAttributes;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
@@ -155,20 +161,18 @@ class Companion
         _pool = pool;
         _sourcePoolName = sourcePoolName;
 
-        checkNotNull(fileAttributes);
-        checkNotNull(destinationPoolCellname, "Destination pool name is unknown. Aborting the request.");
-        checkNotNull(destinationPoolCellDomainName, "Destination domain name is unknown. Aborting the request");
+        _destinationPoolCellname = checkNotNull(destinationPoolCellname, "Destination pool name is unknown.");
+        _destinationPoolCellDomainName = checkNotNull(destinationPoolCellDomainName, "Destination domain name is unknown.");
+        _fileAttributes = checkNotNull(fileAttributes, "File attributes is missing.");
 
-        _destinationPoolCellname = destinationPoolCellname;
-        _destinationPoolCellDomainName = destinationPoolCellDomainName;
+        if (!_fileAttributes.isDefined(FileAttribute.PNFSID)) {
+            throw new IllegalArgumentException("PNFSID is required, got " + _fileAttributes.getDefinedAttributes());
+        }
 
         _callback = callback;
         _forceSourceMode = forceSourceMode;
         _targetState = targetState;
         _stickyRecords = new ArrayList<>(stickyRecords);
-        if (fileAttributes != null) {
-            setFileAttributes(fileAttributes);
-        }
 
         _id = _nextId.getAndIncrement();
 
@@ -386,17 +390,16 @@ class Companion
     /** Asynchronously retrieves the file attributes. */
     synchronized void fetchFileAttributes()
     {
-        _pnfs.send(new PnfsGetFileAttributes(getPnfsId(), Pool2PoolTransferMsg.NEEDED_ATTRIBUTES),
-                   PnfsGetFileAttributes.class,
-                   new Callback<PnfsGetFileAttributes>()
-                   {
-                       @Override
-                       public void success(PnfsGetFileAttributes message)
-                       {
-                           setFileAttributes(message.getFileAttributes());
-                           super.success(message);
-                       }
-                   });
+        CellStub.addCallback(_pnfs.send(new PnfsGetFileAttributes(getPnfsId(), Pool2PoolTransferMsg.NEEDED_ATTRIBUTES)),
+                             new Callback<PnfsGetFileAttributes>()
+                             {
+                                 @Override
+                                 public void success(PnfsGetFileAttributes message)
+                                 {
+                                     setFileAttributes(message.getFileAttributes());
+                                     super.success(message);
+                                 }
+                             }, _executor);
     }
 
     synchronized void setFileAttributes(FileAttributes fileAttributes)
@@ -458,17 +461,16 @@ class Companion
         request.setId(_id);
         request.setForceSourceMode(_forceSourceMode);
 
-        _pool.send(new CellPath(_sourcePoolName),
-                   request, PoolDeliverFileMessage.class,
-                   new Callback<PoolDeliverFileMessage>()
-                   {
-                       @Override
-                       public void success(PoolDeliverFileMessage message)
-                       {
-                           setMoverId(message.getMoverId());
-                           super.success(message);
-                       }
-                   });
+        CellStub.addCallback(_pool.send(new CellPath(_sourcePoolName), request),
+                             new Callback<PoolDeliverFileMessage>()
+                             {
+                                 @Override
+                                 public void success(PoolDeliverFileMessage message)
+                                 {
+                                     setMoverId(message.getMoverId());
+                                     super.success(message);
+                                 }
+                             }, _executor);
     }
 
     private String getInitiator()
@@ -484,9 +486,46 @@ class Companion
 
     synchronized void ping()
     {
-        _pool.send(new CellPath(_sourcePoolName),
-                   "p2p ls -binary " + _moverId, IoJobInfo.class,
-                   new Callback<IoJobInfo>());
+        Futures.addCallback(_pool.send(new CellPath(_sourcePoolName),
+                                       "p2p ls -binary " + _moverId, IoJobInfo.class),
+                            new FutureCallback<IoJobInfo>()
+                            {
+                                @Override
+                                public void onSuccess(IoJobInfo result)
+                                {
+                                    try {
+                                        synchronized (Companion.this) {
+                                            _fsm.success();
+                                        }
+                                    } catch (Throwable e) {
+                                        Thread thisThread = Thread.currentThread();
+                                        Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                                        ueh.uncaughtException( thisThread, e);
+                                    }
+                                }
+
+                                @Override
+                                public void onFailure(Throwable t)
+                                {
+                                    try {
+                                        synchronized (Companion.this) {
+                                            if (t instanceof NoRouteToCellException) {
+                                                _fsm.noroute();
+                                            } else if (t instanceof TimeoutCacheException) {
+                                                _fsm.timeout();
+                                            } else if (t instanceof CacheException) {
+                                                _fsm.failure(((CacheException) t).getRc(), t.getMessage());
+                                            } else {
+                                                _fsm.failure(CacheException.UNEXPECTED_SYSTEM_EXCEPTION, t);
+                                            }
+                                        }
+                                    } catch (Throwable e) {
+                                        Thread thisThread = Thread.currentThread();
+                                        Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                                        ueh.uncaughtException( thisThread, e);
+                                    }
+                                }
+                            }, _executor);
     }
 
     /**
@@ -568,53 +607,57 @@ class Companion
         @Override
         public void success(T message)
         {
-            _executor.execute(new FireAndForgetTask(new Runnable() {
-                    @Override
-                    public void run() {
-                        synchronized (Companion.this) {
-                            _fsm.success();
-                        }
-                    }
-                }));
+            try {
+                synchronized (Companion.this) {
+                    _fsm.success();
+                }
+            } catch (Throwable e) {
+                Thread thisThread = Thread.currentThread();
+                Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                ueh.uncaughtException( thisThread, e);
+            }
         }
 
         @Override
         public void failure(final int rc, final Object cause)
         {
-            _executor.execute(new FireAndForgetTask(new Runnable() {
-                    @Override
-                    public void run() {
-                        synchronized (Companion.this) {
-                            _fsm.failure(rc, cause);
-                        }
-                    }
-                }));
+            try {
+                synchronized (Companion.this) {
+                    _fsm.failure(rc, cause);
+                }
+            } catch (Throwable e) {
+                Thread thisThread = Thread.currentThread();
+                Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                ueh.uncaughtException( thisThread, e);
+            }
         }
 
         @Override
-        public void timeout(CellPath path)
+        public void timeout(String error)
         {
-            _executor.execute(new FireAndForgetTask(new Runnable() {
-                    @Override
-                    public void run() {
-                        synchronized (Companion.this) {
-                            _fsm.timeout();
-                        }
-                    }
-                }));
+            try {
+                synchronized (Companion.this) {
+                    _fsm.timeout();
+                }
+            } catch (Throwable e) {
+                Thread thisThread = Thread.currentThread();
+                Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                ueh.uncaughtException( thisThread, e);
+            }
         }
 
         @Override
         public void noroute(CellPath path)
         {
-            _executor.execute(new FireAndForgetTask(new Runnable() {
-                    @Override
-                    public void run() {
-                        synchronized (Companion.this) {
-                            _fsm.noroute();
-                        }
-                    }
-                }));
+            try {
+                synchronized (Companion.this) {
+                    _fsm.noroute();
+                }
+            } catch (Throwable e) {
+                Thread thisThread = Thread.currentThread();
+                Thread.UncaughtExceptionHandler ueh = thisThread.getUncaughtExceptionHandler();
+                ueh.uncaughtException( thisThread, e);
+            }
         }
     }
 }
