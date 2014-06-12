@@ -181,6 +181,12 @@ public class SecurityFilter implements Filter
             _log.info("/status.php was detected in path");
             return;
         }
+
+        if (fullRequestPath.toString().contains("/remote.php/webdav/")) {
+            _log.info("/status.php was detected in path");
+            return;
+        }
+
         if (!fullRequestPath.startsWith(_rootPath)) {
             throw new PermissionDeniedCacheException("Permission denied");
         }
