@@ -162,7 +162,7 @@ public class SecurityFilter implements Filter
 
         if (!fullPath.startsWith(userRoot) &&
                 (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
-            if (fullRequestPath.toString().contains("/remote.php/webdav/")) {
+            if (fullRequestPath.toString().contains("/remote.php/webdav")) {
                 _log.info("/status.php was detected in path");
                 return;
             }
@@ -187,7 +187,7 @@ public class SecurityFilter implements Filter
             return;
         }
 
-        if (fullRequestPath.toString().contains("/remote.php/webdav/")) {
+        if (fullRequestPath.toString().contains("/remote.php/webdav")) {
             _log.info("/status.php was detected in path");
             return;
         }
