@@ -20,11 +20,14 @@ import org.slf4j.LoggerFactory;
 import javax.security.auth.Subject;
 import javax.servlet.http.HttpServletRequest;
 import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.security.PrivilegedAction;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.Objects;
 
 import static java.util.Arrays.asList;
 
@@ -171,6 +174,8 @@ public class SecurityFilter implements Filter
             } catch (URISyntaxException e) {
                 throw new CacheException(e.getMessage(), e);
             }
+        }
+
         FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
         if (fullRequestPath.toString().contains("/status.php")) {
             _log.info("/status.php was detected in path");
