@@ -164,8 +164,14 @@ public class SecurityFilter implements Filter
 
         String path = request.getAbsolutePath();
         FsPath fullPath = new FsPath(_rootPath, new FsPath(path));
+        FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
+
         if (!fullPath.startsWith(userRoot) &&
                 (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
+            if (fullRequestPath.toString().contains("/remote.php/webdav/")) {
+                _log.info("/status.php was detected in path");
+                return;
+            }
             if (!path.equals("/")) {
                 throw new PermissionDeniedCacheException("Permission denied: " +
                         "path outside user's root");
@@ -182,7 +188,6 @@ public class SecurityFilter implements Filter
             }
         }
 
-        FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
         if (fullRequestPath.toString().contains("/status.php")) {
             _log.info("/status.php was detected in path");
             return;
