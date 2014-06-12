@@ -1,28 +1,5 @@
 package org.dcache.webdav;
 
-import io.milton.http.Auth;
-import io.milton.http.Filter;
-import io.milton.http.FilterChain;
-import io.milton.http.HttpManager;
-import io.milton.http.Request;
-import io.milton.http.Response;
-import io.milton.servlet.ServletRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.security.auth.Subject;
-import javax.servlet.http.HttpServletRequest;
-
-import java.net.InetAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.UnknownHostException;
-import java.security.PrivilegedAction;
-import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
-import java.util.Objects;
-
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
@@ -43,11 +20,14 @@ import org.slf4j.LoggerFactory;
 import javax.security.auth.Subject;
 import javax.servlet.http.HttpServletRequest;
 import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.security.PrivilegedAction;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.Objects;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.util.Arrays.asList;
@@ -200,6 +180,8 @@ public class SecurityFilter implements Filter
             } catch (URISyntaxException e) {
                 throw new CacheException(e.getMessage(), e);
             }
+        }
+
         FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
         if (fullRequestPath.toString().contains("/status.php")) {
             _log.info("/status.php was detected in path");
