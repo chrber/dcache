@@ -163,9 +163,15 @@ public class SecurityFilter implements Filter
         if (!fullPath.startsWith(userRoot) &&
                 (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
             if (fullRequestPath.toString().contains("/remote.php/webdav")) {
+                _log.info("/remote.php/webdav was detected in path");
+                return;
+            }
+
+            if (fullRequestPath.toString().contains("/status.php")) {
                 _log.info("/status.php was detected in path");
                 return;
             }
+
             if (!path.equals("/")) {
                 throw new PermissionDeniedCacheException("Permission denied: " +
                         "path outside user's root");
@@ -188,7 +194,7 @@ public class SecurityFilter implements Filter
         }
 
         if (fullRequestPath.toString().contains("/remote.php/webdav")) {
-            _log.info("/status.php was detected in path");
+            _log.info("/remote.php/webdav was detected in path");
             return;
         }
 
