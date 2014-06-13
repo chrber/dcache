@@ -31,7 +31,7 @@ public class OwnCloudResource
          * To support this behavior we need to fake authentication by
          * returning any non null object.
          */
-        return "";
+        return user;
     }
 
     @Override
