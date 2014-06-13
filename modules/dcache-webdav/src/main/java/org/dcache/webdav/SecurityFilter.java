@@ -20,14 +20,11 @@ import org.slf4j.LoggerFactory;
 import javax.security.auth.Subject;
 import javax.servlet.http.HttpServletRequest;
 import java.net.InetAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.security.PrivilegedAction;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.util.Objects;
 
 import static java.util.Arrays.asList;
 
@@ -157,36 +154,7 @@ public class SecurityFilter implements Filter
         }
 
         String path = request.getAbsolutePath();
-        FsPath fullPath = new FsPath(_rootPath, new FsPath(path));
         FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
-
-        if (!fullPath.startsWith(userRoot) &&
-                (_uploadPath == null || !fullPath.startsWith(_uploadPath))) {
-            if (fullRequestPath.toString().contains("/remote.php/webdav")) {
-                _log.info("/remote.php/webdav was detected in path");
-                return;
-            }
-
-            if (fullRequestPath.toString().contains("/status.php")) {
-                _log.info("/status.php was detected in path");
-                return;
-            }
-
-            if (!path.equals("/")) {
-                throw new PermissionDeniedCacheException("Permission denied: " +
-                        "path outside user's root");
-            }
-
-            try {
-                FsPath redirectFullPath = new FsPath(userRoot, userHome);
-                String redirectPath = _rootPath.relativize(redirectFullPath).toString();
-                URI uri = new URI(request.getAbsoluteUrl());
-                URI redirect = new URI(uri.getScheme(), uri.getAuthority(), redirectPath, null, null);
-                throw new RedirectException(null, redirect.toString());
-            } catch (URISyntaxException e) {
-                throw new CacheException(e.getMessage(), e);
-            }
-        }
 
         if (fullRequestPath.toString().contains("/status.php")) {
             _log.info("/status.php was detected in path");
