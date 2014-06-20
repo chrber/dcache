@@ -1,31 +1,10 @@
 package org.dcache.webdav;
 
-import io.milton.http.Auth;
-import io.milton.http.Filter;
-import io.milton.http.FilterChain;
-import io.milton.http.HttpManager;
-import io.milton.http.Request;
-import io.milton.http.Response;
-import io.milton.servlet.ServletRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.security.auth.Subject;
-import javax.servlet.http.HttpServletRequest;
-
-import java.net.InetAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.UnknownHostException;
-import java.security.PrivilegedAction;
-import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
-
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
-
+import io.milton.http.*;
+import io.milton.servlet.ServletRequest;
 import org.dcache.auth.LoginReply;
 import org.dcache.auth.LoginStrategy;
 import org.dcache.auth.Origin;
@@ -35,6 +14,17 @@ import org.dcache.auth.attributes.LoginAttribute;
 import org.dcache.auth.attributes.ReadOnly;
 import org.dcache.auth.attributes.RootDirectory;
 import org.dcache.util.CertificateFactories;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
+import javax.servlet.http.HttpServletRequest;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.security.PrivilegedAction;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 
 import static java.util.Arrays.asList;
 
@@ -70,6 +60,12 @@ public class SecurityFilter implements Filter
     private LoginStrategy _loginStrategy;
     private FsPath _rootPath = new FsPath();
     private CertificateFactory _cf;
+
+    /*
+      ownCloud magic path
+    */
+    private static final String OC_PREFIX = "/remote.php/webdav";
+    private static final String OC_STATUS = "status.php";
 
     public SecurityFilter()
     {
@@ -165,6 +161,17 @@ public class SecurityFilter implements Filter
 
         String path = request.getAbsolutePath();
         FsPath fullRequestPath = new FsPath(userRoot, userHome, new FsPath(path));
+
+        if (path.endsWith(OC_STATUS)) {
+            _log.warn(OC_STATUS + " was detected in path");
+            return;
+        }
+
+        if (path.contains(OC_PREFIX)) {
+            _log.warn(OC_PREFIX + " was detected in path");
+            return;
+        }
+
         if (!fullRequestPath.startsWith(_rootPath)) {
             throw new PermissionDeniedCacheException("Permission denied");
         }
