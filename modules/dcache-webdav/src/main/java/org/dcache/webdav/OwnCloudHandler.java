@@ -1,5 +1,6 @@
 package org.dcache.webdav;
 
+import io.milton.http.exceptions.NotAuthorizedException;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.slf4j.Logger;
@@ -17,8 +18,25 @@ public class OwnCloudHandler extends AbstractHandler {
 
     private final Logger _log = LoggerFactory.getLogger(OwnCloudHandler.class);
 
+    /*
+      ownCloud magic path
+    */
+    private static final String OC_PREFIX = "/remote.php/webdav";
+    private static final String OC_STATUS = "status.php";
+
     @Override
     public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-        _log.info("ContextPathbase for handler {} is {}", this.getClass(), request.getContextPath());
+        _log.debug("ContextPath for handler {} is {}", this.getClass(), request.getContextPath());
+        if (request.getContextPath().contains(OC_STATUS)) {
+            OwnCloudResource ownCloudResource =  new OwnCloudResource();
+            try {
+                ownCloudResource.sendContent(response.getOutputStream(), null, baseRequest.getParameterMap(), baseRequest.getContentType());
+            } catch (NotAuthorizedException e) {
+                _log.error("User not authorized to get ");
+            }
+            baseRequest.setHandled(true);
+            response.getOutputStream().flush();
+            response.flushBuffer();
+        }
     }
 }
