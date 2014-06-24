@@ -1,5 +1,6 @@
 package org.dcache.webdav;
 
+import io.milton.http.Auth;
 import io.milton.http.exceptions.NotAuthorizedException;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.handler.AbstractHandler;
@@ -30,6 +31,7 @@ public class OwnCloudHandler extends AbstractHandler {
         if (request.getContextPath().contains(OC_STATUS)) {
             OwnCloudResource ownCloudResource =  new OwnCloudResource();
             try {
+                ownCloudResource.authorise((io.milton.http.Request) baseRequest, io.milton.http.Request.Method.CONNECT, new Auth("", new String("")) );
                 ownCloudResource.sendContent(response.getOutputStream(), null, baseRequest.getParameterMap(), baseRequest.getContentType());
             } catch (NotAuthorizedException e) {
                 _log.error("User not authorized to get ");
