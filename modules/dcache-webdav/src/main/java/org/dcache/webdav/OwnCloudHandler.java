@@ -39,9 +39,10 @@ public class OwnCloudHandler extends AbstractHandler {
             response.getOutputStream().flush();
             response.flushBuffer();
         }
-        if (request.getContextPath().contains(OC_PREFIX)) {
-            DcacheResourceFactory dcacheResourceFactory = new DcacheResourceFactory();
-            dcacheResourceFactory.getResource(baseRequest.getRemoteHost(), baseRequest.getContextPath());
-        }
+//        if (request.getContextPath().contains(OC_PREFIX)) {
+//            DcacheResourceFactory dcacheResourceFactory = new DcacheResourceFactory();
+//            dcacheResourceFactory.getResource(baseRequest.getRemoteHost(), baseRequest.getContextPath());
+//
+//        }
     }
 }
