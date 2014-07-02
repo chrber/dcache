@@ -8,10 +8,30 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.io.ByteStreams;
 import com.google.common.net.InetAddresses;
+import diskCacheV111.util.*;
+import diskCacheV111.vehicles.*;
+import dmg.cells.nucleus.*;
+import dmg.cells.services.login.LoginManagerChildrenInfo;
+import dmg.util.Args;
 import io.milton.http.HttpManager;
 import io.milton.http.Request;
 import io.milton.http.ResourceFactory;
 import io.milton.resource.Resource;
+import org.dcache.auth.LoginReply;
+import org.dcache.auth.SubjectWrapper;
+import org.dcache.auth.Subjects;
+import org.dcache.auth.attributes.HomeDirectory;
+import org.dcache.auth.attributes.LoginAttribute;
+import org.dcache.auth.attributes.RootDirectory;
+import org.dcache.cells.CellStub;
+import org.dcache.missingfiles.AlwaysFailMissingFileStrategy;
+import org.dcache.missingfiles.MissingFileStrategy;
+import org.dcache.namespace.FileAttribute;
+import org.dcache.util.*;
+import org.dcache.util.list.DirectoryEntry;
+import org.dcache.util.list.DirectoryListPrinter;
+import org.dcache.util.list.ListDirectoryHandler;
+import org.dcache.vehicles.FileAttributes;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.slf4j.Logger;
@@ -22,75 +42,12 @@ import org.stringtemplate.v4.STGroup;
 import org.stringtemplate.v4.STGroupFile;
 
 import javax.security.auth.Subject;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.PrintWriter;
-import java.io.Writer;
-import java.net.HttpURLConnection;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.SocketTimeoutException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.net.UnknownHostException;
+import java.io.*;
+import java.net.*;
 import java.security.AccessController;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Date;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-import diskCacheV111.util.CacheException;
-import diskCacheV111.util.FileNotFoundCacheException;
-import diskCacheV111.util.FsPath;
-import diskCacheV111.util.PermissionDeniedCacheException;
-import diskCacheV111.util.PnfsHandler;
-import diskCacheV111.util.PnfsId;
-import diskCacheV111.util.TimeoutCacheException;
-import diskCacheV111.vehicles.DoorRequestInfoMessage;
-import diskCacheV111.vehicles.DoorTransferFinishedMessage;
-import diskCacheV111.vehicles.HttpDoorUrlInfoMessage;
-import diskCacheV111.vehicles.HttpProtocolInfo;
-import diskCacheV111.vehicles.IoDoorEntry;
-import diskCacheV111.vehicles.IoDoorInfo;
-import diskCacheV111.vehicles.PnfsCreateEntryMessage;
-import diskCacheV111.vehicles.ProtocolInfo;
-
-import dmg.cells.nucleus.CellMessage;
-import dmg.cells.nucleus.NoRouteToCellException;
-import dmg.cells.services.login.LoginManagerChildrenInfo;
-import dmg.util.Args;
-
-import org.dcache.auth.SubjectWrapper;
-import org.dcache.auth.Subjects;
-import dmg.cells.nucleus.AbstractCellComponent;
-import dmg.cells.nucleus.CellCommandListener;
-import dmg.cells.nucleus.CellMessageReceiver;
-import org.dcache.auth.LoginReply;
-import org.dcache.cells.CellStub;
-import org.dcache.missingfiles.AlwaysFailMissingFileStrategy;
-import org.dcache.missingfiles.MissingFileStrategy;
-import org.dcache.namespace.FileAttribute;
-import org.dcache.util.PingMoversTask;
-import org.dcache.util.RedirectedTransfer;
-import org.dcache.util.Slf4jSTErrorListener;
-import org.dcache.util.Transfer;
-import org.dcache.util.TransferRetryPolicies;
-import org.dcache.util.TransferRetryPolicy;
-import org.dcache.util.list.DirectoryEntry;
-import org.dcache.util.list.DirectoryListPrinter;
-import org.dcache.util.list.ListDirectoryHandler;
-import org.dcache.vehicles.FileAttributes;
-import org.dcache.auth.attributes.HomeDirectory;
-import org.dcache.auth.attributes.LoginAttribute;
-import org.dcache.auth.attributes.RootDirectory;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Arrays.asList;
@@ -543,9 +500,7 @@ public class DcacheResourceFactory
     @Override
     public Resource getResource(String host, String path)
     {
-        if (_log.isDebugEnabled()) {
-            _log.debug("Resolving " + HttpManager.request().getAbsoluteUrl());
-        }
+        _log.debug("Resolving " + HttpManager.request().getAbsoluteUrl());
 
         if (path.endsWith(OC_STATUS)) {
             return new OwnCloudResource();
@@ -554,6 +509,7 @@ public class DcacheResourceFactory
         if (path.contains(OC_PREFIX)) {
             int i = path.indexOf(OC_PREFIX);
             String newPath = path.substring(0, i) + path.substring(i + OC_PREFIX.length());
+            _log.error("For call to {} orginal path {}, altered path: {}", OC_PREFIX, path, newPath);
             return getResource(getFullPath(newPath));
         }
         return getResource(getFullPath(path));

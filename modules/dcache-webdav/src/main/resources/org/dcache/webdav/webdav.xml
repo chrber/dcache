@@ -172,14 +172,6 @@
                       </bean>
                   </property>
               </bean>
-              <!--<bean class="org.eclipse.jetty.server.handler.ContextHandler">-->
-                  <!--<property name="contextPath" value="/remote.php/webdav"/>-->
-                  <!--<property name="handler">-->
-                      <!--<bean class="org.dcache.webdav.OwnCloudHandler">-->
-
-                      <!--</bean>-->
-                  <!--</property>-->
-              <!--</bean>-->
               <bean class="org.eclipse.jetty.server.handler.ContextHandler">
                   <property name="contextPath" value="${webdav.static-content.location}"/>
                   <property name="handler">
