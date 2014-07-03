@@ -11,9 +11,9 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
     local domains
     local heapdumpFile
 
-    bugReportFile=$1
-    domains=$2
-    heapdumpFile=$3
+    bugReportFile="$1"
+    domains="$2"
+    heapdumpFile="$3"
 
     if [ $DEBUG = 1 ]; then
         echo "Heap dumping!!!"
@@ -31,13 +31,13 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
             echo "Executing heap dump command: $heapDumpCommand"
         fi
 
-        addEntryToTableOfContent $bugReportFile $index "Heap-Dump"
+        addEntryToTableOfContent "$bugReportFile" $index "Heap-Dump"
         $heapDumpCommand
         (echo $index. $heapDumpCommand
         echo "------------------------------"
         echo ""
         echo "Please find the heap dump in the tarball that is created with this bug report."
-        echo "") >>  $bugReportFile;
+        echo "") >>  "$bugReportFile";
         index=$(($index + 1))
     done
 }
@@ -46,7 +46,7 @@ addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
 {
     local threadDumpCommand
     threadDumpCommand="dcache dump threads $domains"
-    addEntryToTableOfContent $1 $index "Thread-Dump"
+    addEntryToTableOfContent "$1" $index "Thread-Dump"
 
     threadDumpConfirmMessage=$( $threadDumpCommand )
     echo "Please add the files to your report:\n$threadDumpConfirmMessage"
@@ -56,7 +56,7 @@ addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
     echo "------------------------------"
     echo ""
     echo "$threadDumpConfirmMessage"
-    echo "") >>  $1;
+    echo "") >>  "$1";
 
     index=$(($index + 1))
 }
@@ -168,9 +168,9 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
     local bugReportFilePath
     local headline
 
-    fileToAddPath=$1
-    bugReportFilePath=$2
-    headline=$3
+    fileToAddPath="$1"
+    bugReportFilePath="$2"
+    headline="$3"
 
     if [ $DEBUG = 1 ]; then
        printp "Printing file"
@@ -191,7 +191,7 @@ addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
 {
     sed -ie '/endTableContent/ i\
     \'$2'. '$3'
-    ' $1
+    ' "$1"
 }
 
 addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
@@ -199,8 +199,8 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
     local pieceOfInfo
     local tmpReportfile
 
-    pieceOfInfo=$1
-    tmpReportfile=$2
+    pieceOfInfo="$1"
+    tmpReportfile="$2"
 
     if [ $DEBUG = 1 ]; then
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -219,8 +219,8 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
         read yesOrNo
     done
     if [ $yesOrNo = "y" ]; then
-        writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
-        addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
+        writeFileToBugReport "$pieceOfInfo" "$tmpReportfile" "$pieceOfInfo file" $index
+        addEntryToTableOfContent "$tmpReportfile" $index "$pieceOfInfo"
         if [ $DEBUG = 1 ]; then
             printp "Index currently is: $index"
         fi
@@ -237,8 +237,8 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
 
 addFileToBugReportWithoutQuestion() # $1 = fileURI $2 = tmpReportfile $3 = index
 {
-    local pieceOfInfo=$1
-    local tmpReportfile=$2
+    local pieceOfInfo="$1"
+    local tmpReportfile="$2"
 
     writeFileToBugReport $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
 }
@@ -337,10 +337,10 @@ sendBugReportMail()
     local smtpServer
     local mailClientChoice
 
-    sender=$1
-    destination=$2
-    shortDescription=$3
-    longDescription=$4
+    sender="$1"
+    destination="$2"
+    shortDescription="$3"
+    longDescription="$4"
     fileUrlOnSE="$5"
     tarFilePath="$6"
     smtpServer=$(getProperty dcache.bugreporting.smtp)
@@ -401,12 +401,12 @@ sendBugReportMail()
             ( echo open $smtpServer 25
               sleep 12
               echo "helo $smtpServer"
-              echo "MAIL From: $1"
-              echo "RCPT To: $2"
+              echo "MAIL From: $sender"
+              echo "RCPT To: $destination"
               echo 'DATA'
-              echo "From: $1"
-              echo "To: $2"
-              echo "Subject: $3"
+              echo "From: $sender"
+              echo "To: $destination"
+              echo "Subject: $shortDescription"
               echo "MIME-Version: 1.0"
               echo "Content-Type: multipart/mixed; boundary=\"-q1w2e3r4t5\""
               echo "---q1w2e3r4t5"
@@ -491,7 +491,7 @@ processBugReport()
 
     if [ $# -ne 0 ]; then
 
-        command=$1
+        command="$1"
         shift
         filesFromCommandLine="$@"
         if [ $DEBUG = 1 ]; then
