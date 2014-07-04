@@ -64,28 +64,20 @@ addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
 createBasicBugReportFile()
 # $1 = filePath
 # $2 = tmpBugreportPath
-# $3 = descriptionOfCommand
-# $4 = commandsToExecute
+# $3 = commandsToExecute
 {
     local tmpFilePath
     local tmpDirPath
-    local descriptionOfCommand
     local commandsToExecute
     local yesOrNo
 
     tmpFilePath="$1"
     tmpDirPath="$2"
-    descriptionOfCommand="$3"
-    commandsToExecute="$4"
-
-    numberOfCommandDescriptions=$(echo $descriptionOfCommand | tr ';' '\n' | wc -l | bc)
-    numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
-
-    if [ $numberOfCommandDescriptions !=  $numberOfCommands ]; then
-        printp "Number of command descriptions ($numberOfCommandDescriptions) dissimilar to number of commands ($numberOfCommands)."
-        exit 1;
+    commandsToExecute="$3"
+    if [ $DEBUG = 1 ]; then
+        printp "DescriptionCommandCouples: $commandsToExecute"
     fi
-
+    numberOfCommands=$(echo $commandsToExecute | tr ';' '\n' |wc -l | bc)
     index=$numberOfCommands
 
     if [ "$(uname)" = "SunOS" ]; then
@@ -99,10 +91,8 @@ createBasicBugReportFile()
         (
         local i
         local j
-        IFS=';'
         echo "Table of Content"
         echo "------------------------------------------"
-        j=0
 
         echo ""
         echo "#################################################"
@@ -110,8 +100,13 @@ createBasicBugReportFile()
         echo "#################################################"
         echo ""
 
-        for commandDesc in $descriptionOfCommand; do
+        IFS=';'
+        j=0
+        for commandDescriptionCouple in $commandsToExecute; do
             j=$((j+1))
+            commandDescCouple=$(echo $commandDescriptionCouple | cut -d ';' -f $j)
+            commandDesc=$(expr "${commandDescCouple}" : "\(.*\)::.*$")
+            commandDesc=$(echo $commandDesc | sed 's/^ *//')
             echo "$j. $commandDesc"
         done
 
@@ -124,22 +119,26 @@ createBasicBugReportFile()
         echo "----------endTableContent-----------------"
         echo ""
 
-        unset IFS
-
         i=0
 
-        while [ $i -lt $numberOfCommands ]
-        do
+        for commandDescriptionCouple in $commandsToExecute; do
             i=$((i+1))
-            head1=$(echo $descriptionOfCommand | cut -d ';' -f $i)
-            head2=$(echo $commandsToExecute | cut -d ';' -f $i)
-            echo $i. $head1
+            commandDescCouple=$(echo $commandDescriptionCouple | cut -d ';' -f $i)
+            commandDesc=$(expr "${commandDescCouple}" : "\(.*\)::.*$")
+            commandDesc=$(echo $commandDesc | sed 's/^ *//')
+            command=$(expr "${commandDescCouple}" : ".*::\(.*$\)")
+            echo $i. $commandDesc
             echo "----------------------"
-            echo "$head2"
-            $head2 2>&1
-            echo
+            echo "$command"
+#            eval "$command" 2>&1
+            if eval "$command" 2>&1; then
+                continue;
+            else
+                echo "Command: \"$command\" failed to execute correctly";
+            fi
+            echo ""
         done
-
+        unset IFS
         ) > "$tmpFilePath"
     fi
     index=$(($index + 1))
@@ -482,7 +481,6 @@ processBugReport()
     local trash
 
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
-    descriptionOfCommand=$(getProperty dcache.bugreporting.commands.description)
     commandsToExecute=$(getProperty dcache.bugreporting.commands)
     files=$(getProperty dcache.bugreporting.paths)
     tmpReportPath=$(getProperty dcache.bugreporting.tmpfilepath)
@@ -543,7 +541,7 @@ processBugReport()
     done
 
     # Create basic information that will be included in any report
-    createBasicBugReportFile "$tmpReportfile" "$tmpReportPath" "$descriptionOfCommand" "$commandsToExecute"
+    createBasicBugReportFile "$tmpReportfile" "$tmpReportPath" "$commandsToExecute"
 
     if [ "$choice" = "select" ]; then
         printp " You have chosen to select the information provided with this report
