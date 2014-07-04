@@ -71,6 +71,7 @@ createBasicBugReportFile()
     local tmpDirPath
     local descriptionOfCommand
     local commandsToExecute
+    local yesOrNo
 
     tmpFilePath="$1"
     tmpDirPath="$2"
@@ -198,6 +199,7 @@ addFileToBugReport() # $1 = fileURI $2 = tmpReportfile $3 = index
 {
     local pieceOfInfo
     local tmpReportfile
+    local yesOrNo
 
     pieceOfInfo="$1"
     tmpReportfile="$2"
@@ -264,6 +266,7 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
 {
     local item
     local tmpReportfile
+    local yesOrNo
 
     item="$1"
     tmpReportfile="$2"
@@ -475,6 +478,7 @@ processBugReport()
     local tmpHeapdumpFile
     local FQSN
     local choice
+    local yesOrNo
 
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
     descriptionOfCommand=$(getProperty dcache.bugreporting.commands.description)
