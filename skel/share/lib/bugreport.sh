@@ -479,6 +479,7 @@ processBugReport()
     local FQSN
     local choice
     local yesOrNo
+    local trash
 
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
     descriptionOfCommand=$(getProperty dcache.bugreporting.commands.description)
@@ -596,10 +597,10 @@ processBugReport()
             fi
         done
 
-        echo "Everything will be sent with the report. Please check the following file content."
-        echo "By saving the file you give your consent to send everything that is in the file"
-        echo "along with your bug report."
-        echo "Press RETURN to continue:"
+        printp "Everything will be sent with the report. Please check the following file content.
+        By saving the file you give your consent to send everything that is in the file
+        along with your bug report.
+        Press RETURN to continue:"
         read trash
         if [ $EDITOR ]; then
            $EDITOR $tmpReportfile
@@ -633,8 +634,6 @@ processBugReport()
     tarFile="$tmpReportPath.tar.gz"
     tar czf $tarFile -C "$tmpReportPath" . > /dev/null
 
-    tarFileSizeMB=$(du -hm "$tarFile" | cut -f 1 | sed 's/[A-Za-z]*//g')
-    tarFileSizeMB=${tarFileSizeMB/\.*}
     echo "Deleting tmp bug report directory: $tmpReportPath"
     rm -rf $tmpReportPath
 
