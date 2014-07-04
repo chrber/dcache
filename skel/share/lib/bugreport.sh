@@ -479,6 +479,7 @@ processBugReport()
     local choice
     local yesOrNo
     local trash
+    local smtpServer
 
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
     commandsToExecute=$(getProperty dcache.bugreporting.commands)
@@ -490,7 +491,7 @@ processBugReport()
     heapdumpFileName=$(getProperty dcache.bugreporting.heapdumpfile.name)
     tmpHeapdumpFile=$tmpReportPath/$heapdumpFileName
     FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
-
+    smtpServer=$(getProperty dcache.bugreporting.smtp)
 
     if [ $# -ne 0 ]; then
 
@@ -659,13 +660,18 @@ processBugReport()
     done
     if [ "$sendDirectByMail" = "y" ]; then
         standardReporterAddress=$(getProperty dcache.bugreporting.reporter.email)
-        while [ "$senderMailAddress" = "" ];
+        while [ "$senderMailAddress" = "" ] && [ "$smtpServer" = "" ];
         do
                 senderMailAddress=$standardReporterAddress
                 if [ "$senderMailAddress" = "" ]; then
                     printp "You have not specified an e-mail address, please enter
                             one here or set the dcache.bugreporting.reporter.email
                             property in your $(getProperty dcache.paths.setup) file."
+                fi
+                if [ "$smtpServer" = "" ]; then
+                    printp "Please specify an unauthenticated smtp server in the
+                            property in your $(getProperty dcache.paths.setup) file.
+                            The property you need to set is dcache.bugreporting.smtp"
                 fi
                 printp "\nWe will now e-mail the bug report to $supportEmail. Please provide your mail address (Standard: $standardReporterAddress):"
                 read senderMailAddress
