@@ -1,5 +1,8 @@
-DEBUG=0
+DEBUG=1
 #set -x
+if [ $DEBUG = 1 ]; then
+    echo "Shell is: "$SHELL
+fi
 index=0
 heapdumps=""
 threaddumps=""
@@ -127,16 +130,16 @@ createBasicBugReportFile()
             commandDesc=$(expr "${commandDescCouple}" : "\(.*\)::.*$")
             commandDesc=$(echo $commandDesc | sed 's/^ *//')
             command=$(expr "${commandDescCouple}" : ".*::\(.*$\)")
+            echo "\n"
             echo $i. $commandDesc
             echo "----------------------"
             echo "$command"
-#            eval "$command" 2>&1
+#           eval "$command" 2>&1
             if eval "$command" 2>&1; then
                 continue;
             else
                 echo "Command: \"$command\" failed to execute correctly";
             fi
-            echo ""
         done
         unset IFS
         ) > "$tmpFilePath"
@@ -190,7 +193,7 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
 addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
 {
     sed -ie '/endTableContent/ i\
-    \'$2'. '$3'
+    '$2'. '$3'
     ' "$1"
 }
 
@@ -325,10 +328,8 @@ addItemToBugReport() # $1 = directory  $2 = $tmpReportfile $3 = index
 sendBugReportMail()
 # $1 = sender mail address
 # $2 = destination mail address
-# $3 = short description of problem
-# $4 = long description of problem
-# $5 = URL to tarfile on bugreport SE
-# $6 = tar file
+# $3 =  URL to tarfile on bugreport SE
+# $4 = tar file
 {
     local sender
     local destination
@@ -341,11 +342,8 @@ sendBugReportMail()
 
     sender="$1"
     destination="$2"
-    shortDescription="$3"
-    longDescription="$4"
-    fileUrlOnSE="$5"
-    tarFilePath="$6"
-    smtpServer=$(getProperty dcache.bugreporting.smtp)
+    fileUrlOnSE="$3"
+    tarFilePath="$4"
 
     which telnet > /dev/null
     telnetPresent=$?
@@ -354,11 +352,15 @@ sendBugReportMail()
     which sendmail > /dev/null
     sendmailPresent=$?
 
-    printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
+    smtpServer=$(getProperty dcache.bugreporting.smtp)
+
     if [ $telnetPresent -eq 0 ]; then
-        while [ $smtpServer = "" ]
+        while [ -z "$smtpServer" ];
         do
-            printpi "Please set your smtp server here or set the dcache.bugreporting.smtp
+            if [ $DEBUG = 1 ]; then
+                echo "smtpServer: $smtpServer"
+            fi
+            printp "Please enter your smtp server here or set the dcache.bugreporting.smtp
                     property in in your $(getProperty dcache.paths.setup) file:"
             read smtpServer
         done
@@ -370,8 +372,15 @@ sendBugReportMail()
     if [ $sendmailPresent -eq 0 ]; then
         printpi "sendmail(3) - you need to have your local mail client configured."
     fi
+
+    printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
     echo "\nChoice:"
     read mailClientChoice
+
+    printp "Please provide a short description of the bug (one line):"
+    read shortDescription
+    printp "Now please describe the bug in more detail:"
+    read longDescription
 
     case "$mailClientChoice" in
         3)
@@ -398,7 +407,7 @@ sendBugReportMail()
             echo "Address report was sent from: $sender"
             echo "Address report will be sent to: $destination"
         fi
-        while [ $count = 1 ]
+        while [ $count = 1 ];
         do
             ( echo open $smtpServer 25
               sleep 12
@@ -429,7 +438,7 @@ sendBugReportMail()
               count=2
               echo "Telnet done."
         done
-        rm -rf "$tmpDirPath"/*
+        rm -r "$tmpDirPath"
         ;;
         *)
         echo "You have not chosen a mail program. Please chose one of the above."
@@ -480,6 +489,8 @@ processBugReport()
     local yesOrNo
     local trash
     local smtpServer
+    local checkedMail
+    local senderMailAddress
 
     supportEmail=$(getProperty dcache.bugreporting.supporter.email)
     commandsToExecute=$(getProperty dcache.bugreporting.commands)
@@ -492,6 +503,7 @@ processBugReport()
     tmpHeapdumpFile=$tmpReportPath/$heapdumpFileName
     FQSN="$(getProperty dcache.bugreporting.se.name):$(getProperty dcache.bugreporting.se.port)$(getProperty dcache.bugreporting.se.path)"
     smtpServer=$(getProperty dcache.bugreporting.smtp)
+    senderMailAddress=$(getProperty dcache.bugreporting.reporter.email)
 
     if [ $# -ne 0 ]; then
 
@@ -658,33 +670,46 @@ processBugReport()
         echo "You entered:" $sendDirectByMail
         read sendDirectByMail
     done
+    checkedMail="Mail not checked yet"
     if [ "$sendDirectByMail" = "y" ]; then
-        standardReporterAddress=$(getProperty dcache.bugreporting.reporter.email)
-        while [ "$senderMailAddress" = "" ] && [ "$smtpServer" = "" ];
+        while [ -z "$senderMailAddress" ] && [ "$senderMailAddress" != "$checkedMail" ]
         do
-                senderMailAddress=$standardReporterAddress
-                if [ "$senderMailAddress" = "" ]; then
-                    printp "You have not specified an e-mail address, please enter
-                            one here or set the dcache.bugreporting.reporter.email
-                            property in your $(getProperty dcache.paths.setup) file."
+                if [ $DEBUG = 1 ]; then
+                    echo "sendMail check loop"
                 fi
-                if [ "$smtpServer" = "" ]; then
-                    printp "Please specify an unauthenticated smtp server in the
-                            property in your $(getProperty dcache.paths.setup) file.
-                            The property you need to set is dcache.bugreporting.smtp"
+                if [ -z "$senderMailAddress" ]; then
+                    printp "You have not specified an reporter e-mail address, please
+                            set the dcache.bugreporting.reporter.email
+                            property in your $(getProperty dcache.paths.setup) file
+                            or enter the sender mail address here and press <return>:"
+                    read senderMailAddress
                 fi
-                printp "\nWe will now e-mail the bug report to $supportEmail. Please provide your mail address (Standard: $standardReporterAddress):"
-                read senderMailAddress
+
+                if [ $DEBUG = 1 ]; then
+                    echo "Checking sendermail"
+                fi
+                checkedMail=$(echo "$senderMailAddress" | grep '^[A-z0-9\._%+-]+@[A-z0-9\.-]+\.[A-z]{2,4}$' || :)
+
+                if [ $DEBUG = 1 ]; then
+                    echo "After check sendermail"
+                    echo "checkedMail is: $checkedMail"
+                    echo "senderMailAddress: $senderMailAddress"
+                fi
+
+                if [ "$senderMailAddress" != "$checkedMail" ]; then
+                    printp "Please check your e-mail format. You entered: $senderMailAddress. Please reenter the
+                    a correctly formated e-mail address:"
+                    read senderMailAddress
+                else
+                    printp "The bug report will be sent using $senderMailAddress."
+                fi
         done
         if [ $DEBUG = 1 ]; then
             echo "Reporter e-mail set to: $senderMailAddress"
         fi
-        printp "Please provide a short description of the bug (one line):"
-        read shortDescription
-        printp "Now please describe the bug in more detail:"
-        read longDescription
-        sendBugReportMail  "$senderMailAddress" "$supportEmail" "$shortDescription" "$longDescription" "$url" "$tarFile"
-        rm -f "$tarFile"
+
+        sendBugReportMail  "$senderMailAddress" "$supportEmail" "$url" "$tarFile"
+        rm "$tarFile"
     else
         showFinalReportMessage $url $tarFile
     fi
