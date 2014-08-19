@@ -27,6 +27,55 @@ checkForCorrectYesOrNoAnswer()
     echo "$yesOrNo"
 }
 
+checkForAndChooseEditor()
+{
+    local editorPath
+    local editorChoice
+    local viPresent
+    local emacsPresent
+    local nanoPresent
+
+    which vi > /dev/null
+    viPresent=$?
+    which emacs  > /dev/null
+    emacsPresent=$?
+    which nano  > /dev/null
+    nanoPresent=$?
+
+    if [ $viPresent ] || [ $emacsPresent ] || [ $nanoPresent ]; then
+        echo "Please select the number in brakets to use one of these editors:" 1>&2
+
+        if [ $viPresent ]; then
+            echo "\t(1) vi" 1>&2
+        fi
+        if [ $emacsPresent ]; then
+            echo "\t(2) emacs" 1>&2
+        fi
+        if [ $nanoPresent ]; then
+            echo "\t(3) nano"  1>&2
+        fi
+
+        read editorChoice
+
+        case "$editorChoice" in
+            3)
+            editorPath=`which nano`
+            ;;
+            2)
+            editorPath=`which emacs`
+            ;;
+            1)
+            editorPath=`which vi`
+            ;;
+        esac
+    else
+        echo "No editor was found, please provide the path to your editor:" 1>&2
+        read editorPath
+    fi
+
+    echo $editorPath
+}
+
 cleanUp()
 {
     local tmpDir
@@ -44,11 +93,11 @@ cleanUp()
     fi
 }
 
-# Catching CTRL+c
-trap "echo CTRL-C was pressed.; cleanUp; exit 1"  2
+# Catching CTRL+c and kill
+trap "echo \"SIGINT (CTRL-C) was caught.\"; cleanUp; exit 1"  SIGINT
+trap "echo \"SIGTERM (kill) was caught\"; cleanUp; exit 1" SIGTERM
 
-
-addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
+addHeapDump()
 {
     local bugReportFile
     local domains
@@ -59,7 +108,6 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
     heapdumpFile="$3"
 
     debugStatement "Heap dumping\n
-                    Using bug report file: $bugReportFile\n
                     Using HeapDump file template: $heapdumpFile\n
                     For domains: $domains"
 
@@ -70,7 +118,7 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
         debugStatement "For domain: $domain create file: $domainHeapdumpFile\n
                         Executing heap dump command: $heapDumpCommand"
 
-        addEntryToTableOfContent "$bugReportFile" $index "Heap-Dump"
+        addEntryToTableOfContent "$bugReportFile" "Heap-Dump"
         $heapDumpCommand
         (echo""
         echo $index. $heapDumpCommand
@@ -82,14 +130,21 @@ addHeapDump() # $1 = $tmpReportfile $2 = $domains  $3 = tmpHeapdumpFile
     done
 }
 
-addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
+addThreadDump()
 {
+    local tmpBugreportFile
+    local domains
     local threadDumpCommand
-    local domains=$3
-    threadDumpCommand="dcache dump threads $domains"
-    addEntryToTableOfContent "$1" $index "Thread-Dump"
 
+    tmpBugreportFile=$1
+    domains=$2
+    threadDumpCommand="dcache dump threads $domains"
+
+    addEntryToTableOfContent "$tmpBugreportFile" "Thread-Dump"
+    debugStatement "Start thread dump: $threadDumpCommand"
     threadDumpConfirmMessage=$( $threadDumpCommand )
+    debugStatement "ThreadDump done: $threadDumpConfirmMessage"
+
     echo "Please add the files to your report:\n$threadDumpConfirmMessage"
 
     (echo
@@ -97,15 +152,12 @@ addThreadDump() # $1 = $tmpReportfile $2 = $index $3 = $domains
     echo "------------------------------"
     echo ""
     echo "$threadDumpConfirmMessage"
-    echo "") >>  "$1";
+    echo "") >>  "$tmpBugreportFile";
 
     index=$(($index + 1))
 }
 
 createBasicBugReportFile()
-# $1 = filePath
-# $2 = tmpBugreportPath
-# $3 = commandsToExecute
 {
     local tmpFilePath
     local tmpDirPath
@@ -134,20 +186,18 @@ createBasicBugReportFile()
     fi
 
     tempIndex=0
-    commandDescriptions=$(while IFS= read -r line;
+    commandDescriptions=$(while read -r line;
     do
         tempIndex=$((tempIndex+1))
-        commandDesc=$(expr "${line}" : "\(.*\)::.*$")
-        commandDesc=$(echo $commandDesc | sed 's/^ *//')
+        commandDesc=$(expr "${line}" : "\(.*\)::.*$" | sed 's/^ *//')
         echo "$tempIndex. $commandDesc"
     done <<< "$commandsToExecute")
 
     tempIndex=0
-    headlinePlusCommand=$(while IFS= read -r line;
+    headlinePlusCommand=$(while read -r line;
     do
         tempIndex=$((tempIndex+1))
-        commandDesc=$(expr "${line}" : "\(.*\)::.*$")
-        commandDesc=$(echo $commandDesc | sed 's/^ *//')
+        commandDesc=$(expr "${line}" : "\(.*\)::.*$" | sed 's/^ *//')
         command=$(expr "${line}" : ".*::\(.*$\)")
         echo "\n"
         echo $tempIndex. $commandDesc
@@ -198,11 +248,11 @@ createBasicBugReportFile()
             read domainChoice
         done
         debugStatement "Adding thread dumps for domains: $domainChoice"
-        addThreadDump $tmpReportfile $index $domainChoice
+        addThreadDump $tmpReportfile $domainChoice
     fi
 }
 
-writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headline   $4 = index
+writeFileToBugReport()
 {
     local fileToAddPath
     local bugReportFilePath
@@ -224,14 +274,14 @@ writeFileToBugReport() # $1 = fileToAddPath $2 = bugReportFilePath   $3 = headli
     echo "") >>  $bugReportFilePath;
 }
 
-addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $index $3 = $pieceOfInfo
+addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $pieceOfInfo
 {
     sed -ie '/endTableContent/ i\
-    '$2'. '$3'
+    '$index'. '$2'
     ' "$1"
 }
 
-requestToAddFile() # $1 = fileURI $2 = tmpReportfile $3 = index
+requestToAddFile()
 {
     local pieceOfInfo
     local tmpReportfile
@@ -248,8 +298,8 @@ requestToAddFile() # $1 = fileURI $2 = tmpReportfile $3 = index
     echo "Include $fileUri y/n:"
     yesOrNo=$(checkForCorrectYesOrNoAnswer)
     if [ $yesOrNo = "y" ]; then
-        writeFileToBugReport "$fileUri" "$tmpReportfile" "$fileUri file" $index
-        addEntryToTableOfContent "$tmpReportfile" $index "$fileUri"
+        writeFileToBugReport "$fileUri" "$tmpReportfile" "$fileUri file"
+        addEntryToTableOfContent "$tmpReportfile" "$fileUri"
 
         debugStatement "Index currently is: $index"
 
@@ -261,40 +311,38 @@ requestToAddFile() # $1 = fileURI $2 = tmpReportfile $3 = index
     fi
 }
 
-addFile() # $1 = fileURI $2 = tmpReportfile $3 = index
+addFile()
 {
     local fileUri="$1"
     local tmpReportfile="$2"
 
-    writeFileToBugReport $fileUri $tmpReportfile "$fileUri file" $index
+    writeFileToBugReport $fileUri $tmpReportfile "$fileUri file"
 }
 
-addAllFilesInDirectory() # $1 = directory   $2 = $tmpReportfile  $3 = $index
+addAllFilesInDirectory()
 {
     local directory
     local tmpReportfile
-    local index
 
     directory=$1
     tmpReportfile=$2
-    index=$3
 
-    addEntryToTableOfContent $tmpReportfile $index "$directory"
+    addEntryToTableOfContent $tmpReportfile "$directory"
     index=$(($index + 1))
     allFilesInDirectory=$(ls $directory)
     for itemInDir in $allFilesInDirectory; do
         if [ -d $itemInDir ]; then
-            addItemToBugReport $itemInDir $tmpReportfile $index
+            addItemToBugReport $itemInDir $tmpReportfile
         else
-            writeFileToBugReport $directory/$itemInDir $tmpReportfile "$directory/$itemInDir file" $index
-            addEntryToTableOfContent $tmpReportfile $index $directory/$itemInDir
+            writeFileToBugReport $directory/$itemInDir $tmpReportfile "$directory/$itemInDir file"
+            addEntryToTableOfContent $tmpReportfile $directory/$itemInDir
             index=$(($index + 1))
             echo "File added: $directory/$itemInDir"
         fi
     done
 }
 
-addItemToBugReport() # $1 = directory or file  $2 = $tmpReportfile $3 = index
+addItemToBugReport()
 {
     local item
     local tmpReportfile
@@ -315,7 +363,6 @@ addItemToBugReport() # $1 = directory or file  $2 = $tmpReportfile $3 = index
         printp "Include entire directory $item
                 yes (y) / select one by one (s) / no (n):"
         read choice
-        # This needs to go into a function later
         while ! [ "$choice" = "y" ] && ! [ "$choice" = "n" ] && ! [ "$choice" = "s" ]; do
             echo "Please enter y for yes or n for no or s for selecting one by one:"
             echo "You entered:" $choice
@@ -323,14 +370,14 @@ addItemToBugReport() # $1 = directory or file  $2 = $tmpReportfile $3 = index
         done
         case "$choice" in
             y)
-            addAllFilesInDirectory $item $tmpReportfile $index
+            addAllFilesInDirectory $item $tmpReportfile
             ;;
 
             s)
             local itemsInDir
             itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
-                addItemToBugReport $item/$itemInDir $tmpReportfile $index
+                addItemToBugReport $item/$itemInDir $tmpReportfile
             done
             ;;
 
@@ -339,22 +386,11 @@ addItemToBugReport() # $1 = directory or file  $2 = $tmpReportfile $3 = index
             ;;
         esac
     else
-
-        debugStatement "Adding file: $item\n
-                        BEFORE - Index now at: $index"
-
-        requestToAddFile $item $tmpReportfile $index
-
-        debugStatement "AFTER Index now at: $index"
-
+        requestToAddFile $item $tmpReportfile
     fi
 }
 
 sendBugReportMail()
-# $1 = sender mail address
-# $2 = destination mail address
-# $3 =  URL to tarfile on bugreport SE
-# $4 = tar file
 {
     local sender
     local destination
@@ -364,6 +400,9 @@ sendBugReportMail()
     local tarFilePath
     local smtpServer
     local mailClientChoice
+    local telnetPresent
+    local mailxPresent
+    local sendmailPresent
 
     sender="$1"
     destination="$2"
@@ -426,13 +465,11 @@ sendBugReportMail()
                   $destination  < /dev/null
         ;;
         1)
-        count=1
-
         debugStatement "tar file path: $tarFilePath\n
                         Address report was sent from: $sender\n
                         Address report will be sent to: $destination"
 
-        while [ $count = 1 ];
+        while [ true ];
         do
             ( echo open $smtpServer 25
               sleep 5
@@ -460,17 +497,16 @@ sendBugReportMail()
               echo "---q1w2e3r4t5"
               echo "."
               echo "quit") | telnet
-              count=2
               echo "Telnet done."
+              break
         done
-        rm -r "$tmpDirPath"
         ;;
         *)
         echo "You have not chosen a mail program. Please chose one of the above."
     esac
 }
 
-showFinalReportMessage() # $1 = URL  $2 = tarfile
+showFinalReportMessage()
 {
     local url
     local tarfile
@@ -496,8 +532,8 @@ showFinalReportMessage() # $1 = URL  $2 = tarfile
     echo "*\t$supportEmail"
     echo "*"
     echo "* and write a short description of the bug in the subject line and the long"
-    echo "* description in the body of the e-mail. Also provide the bugreport SE URL
-    echo "* from above and
+    echo "* description in the body of the e-mail. Also provide the bugreport SE URL"
+    echo "* from above and"
     echo "*"
     echo "* Thank you very much that you took the time to report."
     echo "*"
@@ -512,6 +548,7 @@ processBugReport()
     local files
     local tmpReportPath
     local timeStamp
+    local bugReportDir
     local tmpReportPath
     local tmpReportfile
     local heapdumpFileName
@@ -526,13 +563,14 @@ processBugReport()
     local domainChoice
     local allDomains
     local commandSummary
+    local editorPath
 
     supportEmail=$(getProperty dcache.submit.bugreport.supporter.email)
     commandsToExecute=$(getProperty dcache.submit.bugreport.commands)
     files=$(getProperty dcache.submit.bugreport.paths)
-    tmpReportPath=$(getProperty dcache.submit.bugreport.tmpfilepath)
+    bugReportDir=$(getProperty dcache.submit.bugreport.tmpfilepath)
     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
-    tmpReportPath=$tmpReportPath/$timeStamp
+    tmpReportPath=$bugReportDir/$timeStamp
     tmpReportfile=$tmpReportPath/bugReportFile.tmp
     heapdumpFileName=$(getProperty dcache.submit.bugreport.heapdumpfile.name)
     tmpHeapdumpFile=$tmpReportPath/$heapdumpFileName
@@ -571,8 +609,7 @@ processBugReport()
 
     commandSummary=$(while IFS= read -r line;
     do
-        commandDesc=$(expr "${line}" : "\(.*\)::.*$")
-        commandDesc=$(echo $commandDesc | sed 's/^ *//')
+        commandDesc=$(expr "${line}" : "\(.*\)::.*$" | sed 's/^ *//')
         command=$(expr "${line}" : ".*::\(.*$\)")
         echo "\t- $commandDesc: $command"
     done <<<"$commandsToExecute")
@@ -607,34 +644,15 @@ processBugReport()
                             Content header: $pieceOfInfo file\n
                             Index: $index"
 
-            addItemToBugReport $pieceOfInfo $tmpReportfile $index
+            addItemToBugReport $pieceOfInfo $tmpReportfile
          done
-         debugStatement "System editor: $EDITOR"
+         editorPath=$(checkForAndChooseEditor)
+         debugStatement "Chosen editor: $editorPath"
+
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
          read
-
-         which vi > /dev/null
-         viPresent=$?
-         which emacs  > /dev/null
-         emacsPresent=$?
-         which nano  > /dev/null
-         nanoPresent=$?
-         if [ $viPresent ]; then
-           `which vi` $tmpReportfile
-         else
-             if [ $emacsPresent ]; then
-                `which emacs` $tmpReportfile
-             else
-                if [ $nanoPresent ]; then
-                    `which nano` $tmpReportfile
-                else
-                    echo "No editor was found, please provide the path to your editor:"
-                    read editorPath
-                    $editorPath $tmpReportfile
-                fi
-             fi
-         fi
+         $editorPath $tmpReportfile
     else
 
         debugStatement "Adding everything to the report\n
@@ -650,8 +668,8 @@ processBugReport()
 
                     debugStatement "Adding File in directory $pieceOfInfo: $file"
 
-                    addFile $pieceOfInfo/$file $tmpReportfile $index
-                    addEntryToTableOfContent $tmpReportfile $index $file
+                    addFile $pieceOfInfo/$file $tmpReportfile
+                    addEntryToTableOfContent $tmpReportfile $pieceOfInfo/$file
                     echo "File added: $pieceOfInfo/$file"
                     index=$(($index + 1))
                 done
@@ -659,29 +677,26 @@ processBugReport()
 
                 debugStatement "Adding single file: $pieceOfInfo"
 
-                addFile $pieceOfInfo $tmpReportfile "$pieceOfInfo file" $index
-                addEntryToTableOfContent $tmpReportfile $index $pieceOfInfo
+                addFile $pieceOfInfo $tmpReportfile "$pieceOfInfo file"
+                addEntryToTableOfContent $tmpReportfile $pieceOfInfo
                 echo "File added: $pieceOfInfo"
                 index=$(($index + 1))
             fi
         done
 
-        printp "Everything will be sent with the report. Please check the following file content.
-        By saving the file you give your consent to send everything that is in the file
-        along with your bug report.
-        Press RETURN to continue:"
+        editorPath=$(checkForAndChooseEditor)
+        printp "Please check the following file content. By saving the file you give your
+                consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
         read
-        if [ $EDITOR ]; then
-           $EDITOR $tmpReportfile
-        else
-           vi $tmpReportfile
-        fi
+        $editorPath $tmpReportfile
+
     fi
 
     echo "Include heap dump y/n:"
     yesOrNo=$(checkForCorrectYesOrNoAnswer)
-    allDomains=$(getProperty dcache.domains)
+
     if [ $yesOrNo = "y" ]; then
+        allDomains=$(getProperty dcache.domains)
         echo "These are the domains on your machine:"
         echo $allDomains
         echo
@@ -700,11 +715,11 @@ processBugReport()
         addHeapDump "$tmpReportfile" "$domainChoice" "$tmpHeapdumpFile"
     fi
 
-    # Sending bugreport to support@dcache.org
+    # Preparing tar and sending bugreport
 
     printp "Packing file $tmpReportfile"
     tarFile="$tmpReportPath.tar.gz"
-    tar czf $tarFile -C "$tmpReportPath" . > /dev/null
+    tar czf $tarFile -C "$tmpReportPath" --exclude='*.tmpe' . > /dev/null
 
     echo "Deleting tmp bug report directory: $tmpReportPath"
     if [ $tmpReportPath != "/" ]; then
@@ -722,18 +737,12 @@ processBugReport()
         printp "File transfer to $url failed. dCache support SE might be down. Please report."
     fi
     printp "Do you wish to e-mail this report directly from your current machine [y/n]:"
-    read sendDirectByMail
-    # This needs to go into a function later
-    while ! [ "$sendDirectByMail" = "y" ] && ! [ "$sendDirectByMail" = "n" ]; do
-        echo "3 Please enter y thread yes or n for no:"
-        echo "You entered:" $sendDirectByMail
-        read sendDirectByMail
-    done
+    sendDirectByMail=$(checkForCorrectYesOrNoAnswer)
     checkedMail="Mail not checked yet"
     if [ "$sendDirectByMail" = "y" ]; then
         while [ -z "$senderMailAddress" ] && [ "$senderMailAddress" != "$checkedMail" ]
         do
-                debugStatement "sendMail check loop"
+                debugStatement "Loop: check sender mail address"
 
                 if [ -z "$senderMailAddress" ]; then
                     printp "You have not specified an reporter e-mail address, please
@@ -747,12 +756,12 @@ processBugReport()
 
                 checkedMail=$(echo "$senderMailAddress" | grep '^[A-z0-9\._%+-]+@[A-z0-9\.-]+\.[A-z]{2,4}$' || :)
 
-                debugStatement "After check sendermail\n
+                debugStatement "After sender mail check\n
                                 checkedMail is: $checkedMail\n
                                 senderMailAddress: $senderMailAddress"
 
                 if [ "$senderMailAddress" != "$checkedMail" ]; then
-                    printp "Please check your e-mail format. You entered: $senderMailAddress. Please reenter the
+                    printp "Please check your e-mail format. You entered: $senderMailAddress. Please reenter
                     a correctly formated e-mail address:"
                     read senderMailAddress
                 else
