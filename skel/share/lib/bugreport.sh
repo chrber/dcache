@@ -568,7 +568,7 @@ processBugReport()
     supportEmail=$(getProperty dcache.submit.bugreport.supporter.email)
     commandsToExecute=$(getProperty dcache.submit.bugreport.commands)
     files=$(getProperty dcache.submit.bugreport.paths)
-    bugReportDir=$(getProperty dcache.submit.bugreport.tmpfilepath)
+    bugReportDir=$(getProperty dcache.submit.bugreport.dirPath)
     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
     tmpReportPath=$bugReportDir/$timeStamp
     tmpReportfile=$tmpReportPath/bugReportFile.tmp
@@ -580,8 +580,21 @@ processBugReport()
     domainChoice=""
     allDomains=""
 
+
     if [ "$(uname)" = "SunOS" ]; then
-        echo "Bug reporting not implemented yet. Ask Christian to do that if needed."  1>&2;
+        echo "Bug reporting not tested yet. Ask Christian to do that if needed."  1>&2;
+    fi
+
+    if [ -z "$bugReportDir" ]; then
+        printpi "Please set the property dcache.submit.bugreport.dirPath
+                 in your $(getProperty dcache.paths.setup) file. This path
+                 provides the directory that will be used to gather files that
+                 will be bundled in the bug report.
+                 The directory might have to hold several GiB of data.
+                 It must be on a partition that does not crash dCache,
+                 should it every fill up. Maybe you have some scratch space or a mounted
+                 file system that you can use for this purpose."
+        exit 1
     fi
 
     if [ $# -ne 0 ]; then
