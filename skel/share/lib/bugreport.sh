@@ -45,29 +45,32 @@ checkForAndChooseEditor()
     if [ $viPresent ] || [ $emacsPresent ] || [ $nanoPresent ]; then
         echo "Please select the number in brakets to use one of these editors:" 1>&2
 
-        if [ $viPresent ]; then
-            echo "\t(1) vi" 1>&2
-        fi
-        if [ $emacsPresent ]; then
-            echo "\t(2) emacs" 1>&2
-        fi
-        if [ $nanoPresent ]; then
-            echo "\t(3) nano"  1>&2
-        fi
+        while [ "$editorChoice" != 1 ] && [ "$editorChoice" != 2 ] && [ "$editorChoice" != 3 ];
+        do
+            if [ $viPresent ]; then
+                echo "\t(1) vi" 1>&2
+            fi
+            if [ $emacsPresent ]; then
+                echo "\t(2) emacs" 1>&2
+            fi
+            if [ $nanoPresent ]; then
+                echo "\t(3) nano"  1>&2
+            fi
 
-        read editorChoice
+            read editorChoice
 
-        case "$editorChoice" in
-            3)
-            editorPath=`which nano`
-            ;;
-            2)
-            editorPath=`which emacs`
-            ;;
-            1)
-            editorPath=`which vi`
-            ;;
-        esac
+            case "$editorChoice" in
+                3)
+                editorPath=`which nano`
+                ;;
+                2)
+                editorPath=`which emacs`
+                ;;
+                1)
+                editorPath=`which vi`
+                ;;
+            esac
+        done
     else
         echo "No editor was found, please provide the path to your editor:" 1>&2
         read editorPath
@@ -81,7 +84,7 @@ cleanUp()
     local tmpDir
     local yesOrNo
 
-    tmpDir=$(getProperty dcache.submit.bugreport.tmpfilepath)
+    tmpDir=$(getProperty dcache.submit.bugreport.dirPath)
 
     if [ -d "$tmpDir" ]; then
         echo "Do you wish to delete $tmpDir (y/n):"
@@ -248,7 +251,7 @@ createBasicBugReportFile()
             read domainChoice
         done
         debugStatement "Adding thread dumps for domains: $domainChoice"
-        addThreadDump $tmpReportfile $domainChoice
+        addThreadDump "$tmpReportfile" "$domainChoice"
     fi
 }
 
@@ -271,10 +274,10 @@ writeFileToBugReport()
     echo "------------------------------"
     echo ""
     cat $fileToAddPath
-    echo "") >>  $bugReportFilePath;
+    echo "") >>  "$bugReportFilePath";
 }
 
-addEntryToTableOfContent() # $1 = $tmpReportfile $2 = $pieceOfInfo
+addEntryToTableOfContent()
 {
     sed -ie '/endTableContent/ i\
     '$index'. '$2'
@@ -316,7 +319,7 @@ addFile()
     local fileUri="$1"
     local tmpReportfile="$2"
 
-    writeFileToBugReport $fileUri $tmpReportfile "$fileUri file"
+    writeFileToBugReport $fileUri "$tmpReportfile" "$fileUri file"
 }
 
 addAllFilesInDirectory()
@@ -327,15 +330,15 @@ addAllFilesInDirectory()
     directory=$1
     tmpReportfile=$2
 
-    addEntryToTableOfContent $tmpReportfile "$directory"
+    addEntryToTableOfContent "$tmpReportfile" "$directory"
     index=$(($index + 1))
     allFilesInDirectory=$(ls $directory)
     for itemInDir in $allFilesInDirectory; do
         if [ -d $itemInDir ]; then
-            addItemToBugReport $itemInDir $tmpReportfile
+            addItemToBugReport "$itemInDir" "$tmpReportfile"
         else
-            writeFileToBugReport $directory/$itemInDir $tmpReportfile "$directory/$itemInDir file"
-            addEntryToTableOfContent $tmpReportfile $directory/$itemInDir
+            writeFileToBugReport $directory/$itemInDir "$tmpReportfile" "$directory/$itemInDir file"
+            addEntryToTableOfContent "$tmpReportfile" "$directory/$itemInDir"
             index=$(($index + 1))
             echo "File added: $directory/$itemInDir"
         fi
@@ -370,14 +373,14 @@ addItemToBugReport()
         done
         case "$choice" in
             y)
-            addAllFilesInDirectory $item $tmpReportfile
+            addAllFilesInDirectory $item "$tmpReportfile"
             ;;
 
             s)
             local itemsInDir
             itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
-                addItemToBugReport $item/$itemInDir $tmpReportfile
+                addItemToBugReport $item/$itemInDir "$tmpReportfile"
             done
             ;;
 
@@ -386,7 +389,7 @@ addItemToBugReport()
             ;;
         esac
     else
-        requestToAddFile $item $tmpReportfile
+        requestToAddFile $item "$tmpReportfile"
     fi
 }
 
@@ -592,7 +595,7 @@ processBugReport()
                  will be bundled in the bug report.
                  The directory might have to hold several GiB of data.
                  It must be on a partition that does not crash dCache,
-                 should it every fill up. Maybe you have some scratch space or a mounted
+                 should it every fill up. Maybe you have some scratch space, a mounted
                  file system that you can use for this purpose."
         exit 1
     fi
@@ -657,7 +660,7 @@ processBugReport()
                             Content header: $pieceOfInfo file\n
                             Index: $index"
 
-            addItemToBugReport $pieceOfInfo $tmpReportfile
+            addItemToBugReport $pieceOfInfo "$tmpReportfile"
          done
          editorPath=$(checkForAndChooseEditor)
          debugStatement "Chosen editor: $editorPath"
@@ -665,7 +668,7 @@ processBugReport()
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
          read
-         $editorPath $tmpReportfile
+         $editorPath "$tmpReportfile"
     else
 
         debugStatement "Adding everything to the report\n
@@ -681,8 +684,8 @@ processBugReport()
 
                     debugStatement "Adding File in directory $pieceOfInfo: $file"
 
-                    addFile $pieceOfInfo/$file $tmpReportfile
-                    addEntryToTableOfContent $tmpReportfile $pieceOfInfo/$file
+                    addFile $pieceOfInfo/$file "$tmpReportfile"
+                    addEntryToTableOfContent "$tmpReportfile" $pieceOfInfo/$file
                     echo "File added: $pieceOfInfo/$file"
                     index=$(($index + 1))
                 done
@@ -690,8 +693,8 @@ processBugReport()
 
                 debugStatement "Adding single file: $pieceOfInfo"
 
-                addFile $pieceOfInfo $tmpReportfile "$pieceOfInfo file"
-                addEntryToTableOfContent $tmpReportfile $pieceOfInfo
+                addFile $pieceOfInfo "$tmpReportfile" "$pieceOfInfo file"
+                addEntryToTableOfContent "$tmpReportfile" $pieceOfInfo
                 echo "File added: $pieceOfInfo"
                 index=$(($index + 1))
             fi
@@ -701,7 +704,7 @@ processBugReport()
         printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
         read
-        $editorPath $tmpReportfile
+        $editorPath "$tmpReportfile"
 
     fi
 
@@ -742,14 +745,14 @@ processBugReport()
     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
     url="$FQSN/bugReport-$timeStamp.tar.gz"
     echo "Sending bugreport tar to $url"
-    curl -f -T $tarFile $url
+    curl -T $tarFile $url
     curlResult=$?
-    if [ "$curlResult" != 22 ]; then
-        printp "File was transfered to our support SE:  $url"
-    else
-        printp "File transfer to $url failed. dCache support SE might be down. Please report."
-    fi
-    printp "Do you wish to e-mail this report directly from your current machine [y/n]:"
+
+    printp "File was transfered to support SE:  $url"
+
+    printp "Do you wish to e-mail this report directly from your current machine?
+            To do this you will need a configured mail client on your sytem (telnet
+            or sendmail or mailx also need to be installed and configured)  [y/n]:"
     sendDirectByMail=$(checkForCorrectYesOrNoAnswer)
     checkedMail="Mail not checked yet"
     if [ "$sendDirectByMail" = "y" ]; then
