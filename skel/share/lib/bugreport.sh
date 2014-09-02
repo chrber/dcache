@@ -139,8 +139,8 @@ addThreadDump()
     local domains
     local threadDumpCommand
 
-    tmpBugreportFile=$1
-    domains=$2
+    tmpBugreportFile="$1"
+    domains="$2"
     threadDumpCommand="dcache dump threads $domains"
 
     addEntryToTableOfContent "$tmpBugreportFile" "Thread-Dump"
@@ -173,8 +173,6 @@ createBasicBugReportFile()
     tmpFilePath="$1"
     tmpDirPath="$2"
     commandsToExecute="$3"
-    domainChoice=""
-    domains=""
 
     debugStatement "DescriptionCommandCouples: $commandsToExecute"
 
@@ -203,7 +201,7 @@ createBasicBugReportFile()
         commandDesc=$(expr "${line}" : "\(.*\)::.*$" | sed 's/^ *//')
         command=$(expr "${line}" : ".*::\(.*$\)")
         echo "\n"
-        echo $tempIndex. $commandDesc
+        echo "$tempIndex. $commandDesc"
         echo "----------------------"
         echo "$command"
         eval "$command" 2>&1 || echo "Command: \"$command\" failed to execute correctly"
@@ -240,7 +238,7 @@ createBasicBugReportFile()
 
     echo "Do you wish to include a thread dump in this report y/n:"
     yesOrNo=$(checkForCorrectYesOrNoAnswer)
-    domains=$(getProperty dcache.domains)
+    domains="$(getProperty dcache.domains)"
     if [ $yesOrNo = "y" ]; then
         echo "\nThese are the domains on your machine:"
         echo $domains
@@ -273,7 +271,7 @@ writeFileToBugReport()
     (echo $index. $headline
     echo "------------------------------"
     echo ""
-    cat $fileToAddPath
+    cat "$fileToAddPath"
     echo "") >>  "$bugReportFilePath";
 }
 
@@ -301,7 +299,7 @@ requestToAddFile()
     echo "Include $fileUri y/n:"
     yesOrNo=$(checkForCorrectYesOrNoAnswer)
     if [ $yesOrNo = "y" ]; then
-        writeFileToBugReport "$fileUri" "$tmpReportfile" "$fileUri file"
+        writeFileToBugReport "$fileUri" "$tmpReportfile" "File: $fileUri"
         addEntryToTableOfContent "$tmpReportfile" "$fileUri"
 
         debugStatement "Index currently is: $index"
@@ -327,17 +325,17 @@ addAllFilesInDirectory()
     local directory
     local tmpReportfile
 
-    directory=$1
-    tmpReportfile=$2
+    directory="$1"
+    tmpReportfile="$2"
 
     addEntryToTableOfContent "$tmpReportfile" "$directory"
     index=$(($index + 1))
-    allFilesInDirectory=$(ls $directory)
+    allFilesInDirectory=$(ls "$directory")
     for itemInDir in $allFilesInDirectory; do
         if [ -d $itemInDir ]; then
             addItemToBugReport "$itemInDir" "$tmpReportfile"
         else
-            writeFileToBugReport $directory/$itemInDir "$tmpReportfile" "$directory/$itemInDir file"
+            writeFileToBugReport $directory/$itemInDir "$tmpReportfile" "File: $directory/$itemInDir"
             addEntryToTableOfContent "$tmpReportfile" "$directory/$itemInDir"
             index=$(($index + 1))
             echo "File added: $directory/$itemInDir"
@@ -373,14 +371,14 @@ addItemToBugReport()
         done
         case "$choice" in
             y)
-            addAllFilesInDirectory $item "$tmpReportfile"
+            addAllFilesInDirectory "$item" "$tmpReportfile"
             ;;
 
             s)
             local itemsInDir
             itemsInDir=$(ls $item)
             for itemInDir in $itemsInDir; do
-                addItemToBugReport $item/$itemInDir "$tmpReportfile"
+                addItemToBugReport "$item/$itemInDir" "$tmpReportfile"
             done
             ;;
 
@@ -389,7 +387,7 @@ addItemToBugReport()
             ;;
         esac
     else
-        requestToAddFile $item "$tmpReportfile"
+        requestToAddFile "$item" "$tmpReportfile"
     fi
 }
 
@@ -419,7 +417,7 @@ sendBugReportMail()
     which sendmail > /dev/null
     sendmailPresent=$?
 
-    smtpServer=$(getProperty dcache.submit.bugreport.smtp)
+    smtpServer=$(getProperty dcache.submit.bugreport.email.smtp)
 
     if [ $telnetPresent -eq 0 ]; then
         while [ -z "$smtpServer" ];
@@ -427,7 +425,7 @@ sendBugReportMail()
 
             debugStatement "smtpServer: $smtpServer"
 
-            printp "Please enter your smtp server here or set the dcache.submit.bugreport.smtp
+            printp "Please enter your smtp server here or set the dcache.submit.bugreport.email.smtp
                     property in in your $(getProperty dcache.paths.setup) file:"
             read smtpServer
         done
@@ -440,55 +438,20 @@ sendBugReportMail()
         printpi "sendmail(3) - you need to have your local mail client configured."
     fi
 
-    printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
-    echo "\nChoice:"
-    read mailClientChoice
-
     printp "Please provide a short description of the bug (one line):"
     read shortDescription
     printp "Now please describe the bug in more detail [Finish pressing ESC]:"
     read -d $'\e' longDescription
 
-    case "$mailClientChoice" in
-        3)
-        ( echo "------------------------------------------"
-          echo "Problem Description"
-          echo "------------------------------------------"
-          echo "$longDescription"
-          echo ""
-          echo "----------------------------------------------"
-          echo "Bugreport file URL on dCache SE: $fileUrlOnSE"
-          echo "-----------------------------------------------"
-          echo "\n"
-        ) | sendmail $destination
-        ;;
-        2)
-        from=$sender smtp=$smtpServer \
-                  mailx -n -s "$shortDescription" \
-                  $destination  < /dev/null
-        ;;
-        1)
-        debugStatement "tar file path: $tarFilePath\n
-                        Address report was sent from: $sender\n
-                        Address report will be sent to: $destination"
+    while [ "$mailClientChoice" != 1 ] && [ "$mailClientChoice" != 2 ] && [ "$mailClientChoice" != 3 ];
+    do
+        printp "\nPlease enter the number in brackets to use one of these clients to send your mail:"
+        echo "\nChoice:"
+        read mailClientChoice
 
-        while [ true ];
-        do
-            ( echo open $smtpServer 25
-              sleep 5
-              echo "helo $smtpServer"
-              echo "MAIL From: $sender"
-              echo "RCPT To: $destination"
-              echo 'DATA'
-              echo "From: $sender"
-              echo "To: $destination"
-              echo "Subject: $shortDescription"
-              echo "MIME-Version: 1.0"
-              echo "Content-Type: multipart/mixed; boundary=\"-q1w2e3r4t5\""
-              echo "---q1w2e3r4t5"
-              echo "Content-Transfer-Encoding: quoted-printable"
-              echo "Content-Type: text/plain; charset=us-ascii"
-              echo "------------------------------------------"
+        case "$mailClientChoice" in
+            3)
+            ( echo "------------------------------------------"
               echo "Problem Description"
               echo "------------------------------------------"
               echo "$longDescription"
@@ -497,16 +460,54 @@ sendBugReportMail()
               echo "Bugreport file URL on dCache SE: $fileUrlOnSE"
               echo "-----------------------------------------------"
               echo "\n"
-              echo "---q1w2e3r4t5"
-              echo "."
-              echo "quit") | telnet
-              echo "Telnet done."
-              break
-        done
-        ;;
-        *)
-        echo "You have not chosen a mail program. Please chose one of the above."
-    esac
+            ) | sendmail $destination
+            ;;
+            2)
+            from=$sender smtp=$smtpServer \
+                      mailx -n -s "$shortDescription" \
+                      $destination  < /dev/null
+            ;;
+            1)
+            debugStatement "tar file path: $tarFilePath\n
+                            Address report was sent from: $sender\n
+                            Address report will be sent to: $destination"
+
+            while [ true ];
+            do
+                ( echo open $smtpServer 25
+                  sleep 5
+                  echo "helo $smtpServer"
+                  echo "MAIL From: $sender"
+                  echo "RCPT To: $destination"
+                  echo 'DATA'
+                  echo "From: $sender"
+                  echo "To: $destination"
+                  echo "Subject: $shortDescription"
+                  echo "MIME-Version: 1.0"
+                  echo "Content-Type: multipart/mixed; boundary=\"-q1w2e3r4t5\""
+                  echo "---q1w2e3r4t5"
+                  echo "Content-Transfer-Encoding: quoted-printable"
+                  echo "Content-Type: text/plain; charset=us-ascii"
+                  echo "------------------------------------------"
+                  echo "Problem Description"
+                  echo "------------------------------------------"
+                  echo "$longDescription"
+                  echo ""
+                  echo "----------------------------------------------"
+                  echo "Bugreport file URL on dCache SE: $fileUrlOnSE"
+                  echo "-----------------------------------------------"
+                  echo "\n"
+                  echo "---q1w2e3r4t5"
+                  echo "."
+                  echo "quit") | telnet
+                  echo "Telnet done."
+                  break
+            done
+            ;;
+            *)
+            echo "You have not chosen a mail program. Please chose one of the above."
+        esac
+    done
 }
 
 showFinalReportMessage()
@@ -568,21 +569,19 @@ processBugReport()
     local commandSummary
     local editorPath
 
-    supportEmail=$(getProperty dcache.submit.bugreport.supporter.email)
+    supportEmail=$(getProperty dcache.submit.bugreport.email.support)
     commandsToExecute=$(getProperty dcache.submit.bugreport.commands)
     files=$(getProperty dcache.submit.bugreport.paths)
-    bugReportDir=$(getProperty dcache.submit.bugreport.dirPath)
+    bugReportDir="$(getProperty dcache.submit.bugreport.dirPath)"
     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
-    tmpReportPath=$bugReportDir/$timeStamp
-    tmpReportfile=$tmpReportPath/bugReportFile.tmp
-    heapdumpFileName=$(getProperty dcache.submit.bugreport.heapdumpfile.name)
-    tmpHeapdumpFile=$tmpReportPath/$heapdumpFileName
+    tmpReportPath="$bugReportDir/$timeStamp"
+    tmpReportfile="$tmpReportPath/bugReportFile.tmp"
+    heapdumpFileName="$(getProperty dcache.submit.bugreport.heapdumpfile.name)"
+    tmpHeapdumpFile="$tmpReportPath/$heapdumpFileName"
     FQSN="$(getProperty dcache.submit.bugreport.se.name):$(getProperty dcache.submit.bugreport.se.port)$(getProperty dcache.submit.bugreport.se.path)"
-    smtpServer=$(getProperty dcache.submit.bugreport.smtp)
-    senderMailAddress=$(getProperty dcache.submit.bugreport.reporter.email)
-    domainChoice=""
-    allDomains=""
-
+    smtpServer=$(getProperty dcache.submit.bugreport.email.smtp)
+    senderMailAddress=$(getProperty dcache.submit.bugreport.email.reporter)
+    editorPath=$(getProperty dcache.submit.bugreport.editor)
 
     if [ "$(uname)" = "SunOS" ]; then
         echo "Bug reporting not tested yet. Ask Christian to do that if needed."  1>&2;
@@ -594,7 +593,7 @@ processBugReport()
                  provides the directory that will be used to gather files that
                  will be bundled in the bug report.
                  The directory might have to hold several GiB of data.
-                 It must be on a partition that does not crash dCache,
+                 It must be on a partition that does not crash dCache or your machine,
                  should it every fill up. Maybe you have some scratch space, a mounted
                  file system that you can use for this purpose."
         exit 1
@@ -616,14 +615,14 @@ processBugReport()
             ;;
             "only")
             debugStatement "Command only"
-            files=$filesFromCommandLine
+            files="$filesFromCommandLine"
             ;;
             *)
             usage
         esac
     fi
 
-    commandSummary=$(while IFS= read -r line;
+    commandSummary=$(while read -r line;
     do
         commandDesc=$(expr "${line}" : "\(.*\)::.*$" | sed 's/^ *//')
         command=$(expr "${line}" : ".*::\(.*$\)")
@@ -660,15 +659,17 @@ processBugReport()
                             Content header: $pieceOfInfo file\n
                             Index: $index"
 
-            addItemToBugReport $pieceOfInfo "$tmpReportfile"
+            addItemToBugReport "$pieceOfInfo" "$tmpReportfile"
          done
-         editorPath=$(checkForAndChooseEditor)
+         if [ -z $editorPath ]; then
+            editorPath="$(checkForAndChooseEditor)"
+         fi
          debugStatement "Chosen editor: $editorPath"
 
          printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
          read
-         $editorPath "$tmpReportfile"
+         "$editorPath" "$tmpReportfile"
     else
 
         debugStatement "Adding everything to the report\n
@@ -678,14 +679,14 @@ processBugReport()
 
             debugStatement "PieceOfInfo: $pieceOfInfo"
 
-            if [ -d $pieceOfInfo ]; then
-                filesInDirectory=$(ls $pieceOfInfo)
+            if [ -d "$pieceOfInfo" ]; then
+                filesInDirectory=$(ls "$pieceOfInfo")
                 for file in $filesInDirectory; do
 
                     debugStatement "Adding File in directory $pieceOfInfo: $file"
 
-                    addFile $pieceOfInfo/$file "$tmpReportfile"
-                    addEntryToTableOfContent "$tmpReportfile" $pieceOfInfo/$file
+                    addFile "$pieceOfInfo/$file" "$tmpReportfile"
+                    addEntryToTableOfContent "$tmpReportfile" "$pieceOfInfo/$file"
                     echo "File added: $pieceOfInfo/$file"
                     index=$(($index + 1))
                 done
@@ -693,18 +694,20 @@ processBugReport()
 
                 debugStatement "Adding single file: $pieceOfInfo"
 
-                addFile $pieceOfInfo "$tmpReportfile" "$pieceOfInfo file"
-                addEntryToTableOfContent "$tmpReportfile" $pieceOfInfo
+                addFile "$pieceOfInfo" "$tmpReportfile" "$pieceOfInfo file"
+                addEntryToTableOfContent "$tmpReportfile" "$pieceOfInfo"
                 echo "File added: $pieceOfInfo"
                 index=$(($index + 1))
             fi
         done
 
-        editorPath=$(checkForAndChooseEditor)
+        if [ -z "$editorPath" ]; then
+            editorPath="$(checkForAndChooseEditor)"
+        fi
         printp "Please check the following file content. By saving the file you give your
                 consent to send everything that is in the file along with your bug report. Press RETURN to continue:"
         read
-        $editorPath "$tmpReportfile"
+        "$editorPath" "$tmpReportfile"
 
     fi
 
@@ -735,25 +738,28 @@ processBugReport()
 
     printp "Packing file $tmpReportfile"
     tarFile="$tmpReportPath.tar.gz"
-    tar czf $tarFile -C "$tmpReportPath" --exclude='*.tmpe' . > /dev/null
+    tar czf "$tarFile" -C "$tmpReportPath" --exclude='*.tmpe' . > /dev/null
 
     echo "Deleting tmp bug report directory: $tmpReportPath"
-    if [ $tmpReportPath != "/" ]; then
-        rm -rf $tmpReportPath
+    if [ "$tmpReportPath" != "/" ]; then
+        rm -rf "$tmpReportPath"
     fi
 
     timeStamp=$(date +'%Y-%m-%dT%H:%M:%SUTC')
     url="$FQSN/bugReport-$timeStamp.tar.gz"
     echo "Sending bugreport tar to $url"
-    curl -T $tarFile $url
-    curlResult=$?
+    curl -T "$tarFile" $url
 
     printp "File was transfered to support SE:  $url"
 
     printp "Do you wish to e-mail this report directly from your current machine?
             To do this you will need a configured mail client on your sytem (telnet
             or sendmail or mailx also need to be installed and configured)  [y/n]:"
-    sendDirectByMail=$(checkForCorrectYesOrNoAnswer)
+    if [ sendMailEnabled ]; then
+        sendDirectByMail=$(checkForCorrectYesOrNoAnswer)
+    else
+        sendDirectByMail="n"x
+    fi
     checkedMail="Mail not checked yet"
     if [ "$sendDirectByMail" = "y" ]; then
         while [ -z "$senderMailAddress" ] && [ "$senderMailAddress" != "$checkedMail" ]
@@ -762,7 +768,7 @@ processBugReport()
 
                 if [ -z "$senderMailAddress" ]; then
                     printp "You have not specified an reporter e-mail address, please
-                            set the dcache.submit.bugreport.reporter.email
+                            set the dcache.submit.bugreport.email.reporter
                             property in your $(getProperty dcache.paths.setup) file
                             or enter the sender mail address here and press <return>:"
                     read senderMailAddress
@@ -790,6 +796,6 @@ processBugReport()
         sendBugReportMail  "$senderMailAddress" "$supportEmail" "$url" "$tarFile"
         rm "$tarFile"
     else
-        showFinalReportMessage $url $tarFile
+        showFinalReportMessage $url "$tarFile"
     fi
 }
