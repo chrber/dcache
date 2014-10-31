@@ -419,6 +419,13 @@ sendBugReportMail()
 
     smtpServer=$(getProperty dcache.submit.bugreport.email.smtp)
 
+    printp "Please provide a short description of the bug (one line):"
+    read shortDescription
+    printp "Now please describe the bug in more detail [Finish pressing ESC]:"
+    read -d $'\e' longDescription
+
+    printpi "Send no -e-mail(0)."
+
     if [ $telnetPresent -eq 0 ]; then
         while [ -z "$smtpServer" ];
         do
@@ -437,11 +444,6 @@ sendBugReportMail()
     if [ $sendmailPresent -eq 0 ]; then
         printpi "sendmail(3) - you need to have your local mail client configured."
     fi
-
-    printp "Please provide a short description of the bug (one line):"
-    read shortDescription
-    printp "Now please describe the bug in more detail [Finish pressing ESC]:"
-    read -d $'\e' longDescription
 
     while [ "$mailClientChoice" != 1 ] && [ "$mailClientChoice" != 2 ] && [ "$mailClientChoice" != 3 ];
     do
@@ -504,6 +506,10 @@ sendBugReportMail()
                   break
             done
             ;;
+            0)
+            echo "You have chosen not to send an e-mail directly."
+            showFinalReportMessage "$fileUrlOnSE" "$tarFilePath"
+            ;;
             *)
             echo "You have not chosen a mail program. Please chose one of the above."
         esac
@@ -527,7 +533,7 @@ showFinalReportMessage()
     fi
     if [ ! -z "$url" ]; then
         echo "*"
-        echo "* The report tar file has been stored on our bugreport SE:\n"
+        echo "* The report tar file has been stored on the dCache.ORG bugreport SE:\n"
         echo "*\t$url"
     fi
     echo "*"
@@ -594,7 +600,7 @@ processBugReport()
                  will be bundled in the bug report.
                  The directory might have to hold several GiB of data.
                  It must be on a partition that does not crash dCache or your machine,
-                 should it every fill up. Maybe you have some scratch space, a mounted
+                 should it ever fill up. Maybe you have some scratch space, a mounted
                  file system that you can use for this purpose."
         exit 1
     fi
@@ -794,7 +800,7 @@ processBugReport()
         debugStatement "Reporter e-mail set to: $senderMailAddress and checkedMail: $checkedMail"
 
         sendBugReportMail  "$senderMailAddress" "$supportEmail" "$url" "$tarFile"
-        rm "$tarFile"
+#        rm "$tarFile"
     else
         showFinalReportMessage $url "$tarFile"
     fi
