@@ -100,6 +100,13 @@
         </pluginRepository>
     </pluginRepositories>
 
+    <distributionManagement>
+        <snapshotRepository>
+            <id>pcells</id>
+            <url>https://download.dcache.org/nexus/content/repositories/pcells</url>
+        </snapshotRepository>
+    </distributionManagement>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -411,7 +418,7 @@
             </dependency>
 
             <dependency>
-                <groupId>org.apache.sshd</groupId>
+                <groupId>org.apache.maven-jar-plugin</groupId>
                 <artifactId>sshd-core</artifactId>
                 <version>0.8.0</version>
             </dependency>
