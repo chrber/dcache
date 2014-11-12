@@ -110,6 +110,13 @@
         </pluginRepository>
     </pluginRepositories>
 
+    <distributionManagement>
+        <snapshotRepository>
+            <id>pcells</id>
+            <url>https://download.dcache.org/nexus/content/repositories/pcells</url>
+        </snapshotRepository>
+    </distributionManagement>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
