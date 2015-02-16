@@ -843,7 +843,7 @@
                 </exclusion>
             </exclusions>
         </dependency>
-	<dependency>
+	    <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
             <version>4.3.3</version>
@@ -894,6 +894,21 @@
             <artifactId>mockito-core</artifactId>
             <version>1.10.8</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>info.cukes</groupId>
+            <artifactId>cucumber-java</artifactId>
+            <version>1.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>info.cukes</groupId>
+            <artifactId>cucumber-jvm</artifactId>
+            <version>1.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>info.cukes</groupId>
+            <artifactId>cucumber-junit</artifactId>
+            <version>1.2.0      </version>
         </dependency>
         <dependency>
             <groupId>junit</groupId>
@@ -1276,8 +1291,8 @@
         <module>modules/gplazma2-gsi</module>
         <module>modules/gplazma2-htpasswd</module>
         <module>modules/javatunnel</module>
-	<module>modules/dcache-vehicles</module>
-	<module>modules/dcache-nearline-spi</module>
+	    <module>modules/dcache-vehicles</module>
+	    <module>modules/dcache-nearline-spi</module>
         <module>modules/dcache</module>
         <module>modules/dcache-chimera</module>
         <module>modules/dcache-ftp</module>
