@@ -1,5 +1,7 @@
 package org.dcache.boot;
 
+import com.zaxxer.hikari.pool.PoolInitializationException;
+import org.postgresql.util.PSQLException;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
@@ -139,9 +141,23 @@ public class BootLoader
             handleFatalError(e.getMessage(), args);
         } catch (IOException e) {
             handleFatalError(e.toString(), args);
+        } catch (PoolInitializationException pie) {
+            if (pie.getCause() instanceof PSQLException) {
+                PSQLException psqlException = (PSQLException) pie.getCause();
+                handleFatalDatabaseError(psqlException.getSQLState(), args);
+            } else {
+                throw pie;
+            }
         } catch (RuntimeException e) {
             handleFatalError(e, args);
         }
+    }
+
+    private static void handleFatalDatabaseError(Object message, Args args) {
+        LoggerFactory.getLogger("root")
+                .error(AlarmMarkerFactory.getMarker(PredefinedAlarm.DOMAIN_STARTUP_FAILURE,
+                                NetworkUtils.getCanonicalHostName(),
+                                args.toString()), (String) message, message);
     }
 
     private static void handleFatalError(Object message, Args args) {
@@ -157,10 +173,7 @@ public class BootLoader
             }
 
             LoggerFactory.getLogger("root")
-                .error(AlarmMarkerFactory.getMarker(PredefinedAlarm.DOMAIN_STARTUP_FAILURE,
-                                                    NetworkUtils.getCanonicalHostName(),
-                                                    args.toString()),
-                        logMessage, message);
+                .error(AlarmMarkerFactory.getMarker(PredefinedAlarm.DOMAIN_STARTUP_FAILURE, NetworkUtils.getCanonicalHostName(), args.toString()), logMessage, message);
         } else {
             if (message instanceof RuntimeException) {
                 getRootCause((RuntimeException)message).printStackTrace();
